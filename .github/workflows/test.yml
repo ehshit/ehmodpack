@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
-      - name: Is the commit fron a PR?
+      - name: Is the commit from a PR?
         id: detect
         shell: bash
         run: |
