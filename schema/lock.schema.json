@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.ehis.gay/ehmodpack/schema/lock.schema.json",
+  "title": "ehmodpack ehmodpack.lock.json",
+  "description": "The locked state of a modpack.",
+  "type": "object",
+  "required": ["lock_version", "manifest_hash", "name", "targets"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "where an editor can find this schema"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "the schema this file was written against"
+    },
+    "lock_version": {
+      "type": "integer",
+      "description": "the shape of this file, not the schema version"
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "rfc 3339 timestamp of the last lock"
+    },
+    "manifest_hash": {
+      "type": "string",
+      "description": "sha256 of the manifest this was resolved from (a mismatch means the lock is stale)"
+    },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "summary": { "type": "string" },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/target" }
+    }
+  },
+  "$defs": {
+    "support": {
+      "enum": ["required", "optional", "unsupported"]
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "client": { "$ref": "#/$defs/support" },
+        "server": { "$ref": "#/$defs/support" }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "required": ["sha1", "sha512"],
+      "properties": {
+        "sha1": { "type": "string" },
+        "sha512": { "type": "string" }
+      }
+    },
+    "loader": {
+      "type": "object",
+      "required": ["type", "version"],
+      "properties": {
+        "type": { "enum": ["fabric", "quilt", "neoforge"] },
+        "version": { "type": "string" }
+      }
+    },
+    "lockedPackage": {
+      "type": "object",
+      "required": ["type", "project", "path", "hashes", "downloads", "env"],
+      "properties": {
+        "type": { "enum": ["mod", "resourcepack", "shader", "datapack"] },
+        "project": { "type": "string" },
+        "project_id": { "type": "string" },
+        "version_id": { "type": "string" },
+        "version_number": { "type": "string" },
+        "filename": { "type": "string" },
+        "path": { "type": "string" },
+        "hashes": { "$ref": "#/$defs/hashes" },
+        "downloads": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "file_size": { "type": "integer" },
+        "env": { "$ref": "#/$defs/env" },
+        "position": {
+          "enum": ["top", "bottom"],
+          "description": "present means this pack is active in options.txt at testing and build time"
+        },
+        "source": { "type": "string" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["minecraft", "loader", "packages"],
+      "properties": {
+        "minecraft": { "type": "string" },
+        "java": { "type": "string" },
+        "loader": { "$ref": "#/$defs/loader" },
+        "packages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lockedPackage" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+renderDistance:12
+simulationDistance:12
+maxFps:260
+resourcePacks:["vanilla"]
+incompatibleResourcePacks:[]

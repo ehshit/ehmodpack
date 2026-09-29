@@ -1,0 +1,60 @@
+[package]
+name = "ehmodpack"
+version = "1.0.1"
+authors = ["Eh's modpack <ehmodpack@ehis.gay>"]
+edition = "2024"
+rust-version = "1.85"
+description = "it does modpacks because it says so"
+license = "MIT"
+repository = "https://github.com/ehshit/ehmodpack"
+homepage = "https://docs.ehis.gay"
+
+[package.metadata.ehmodpack]
+# Do not edit or remove this (Usually used by the workflow build)
+icon = ".github/icon/icon.png"
+icon-windows = ".github/icon/icon-windows.ico"
+package-description = "Build, Create, and Publish Modrinth Modpacks with eh's modpacks"
+
+
+[lib]
+name = "ehmodpack"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ehmodpack"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+anyhow = "1"
+argon2 = "0.5"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+jsonc-parser = { version = "0.26", features = ["serde"] }
+inquire = "0.7"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+owo-colors = "4"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "gzip"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.10"
+sha2 = "0.10"
+time = { version = "0.3", features = ["formatting", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+toml_edit = "0.22"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

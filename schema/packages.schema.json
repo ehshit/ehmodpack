@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.ehis.gay/ehmodpack/schema/packages.schema.json",
+  "title": "ehmodpack packages.json",
+  "description": "The list of mods and resource packs a modpack is made of",
+  "type": "object",
+  "required": [
+    "name",
+    "packages"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "where an editor can find this schema"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "the schema this file was written against"
+    },
+    "name": {
+      "type": "string",
+      "description": "the modpack name, used as the .mrpack file name"
+    },
+    "modrinthProjectId": {
+      "type": "string",
+      "description": "Your modrinth project id"
+    },
+    "summary": {
+      "type": "string",
+      "description": "one line about the modpack"
+    },
+    "version": {
+      "type": "string",
+      "default": "0.0.0",
+      "description": "becomes versionId in modrinth.index.json"
+    },
+    "top": {
+      "type": "string",
+      "description": "The top game version when publishing"
+    },
+    "client": {
+      "type": "boolean",
+      "default": true,
+      "description": "bundle client-overrides"
+    },
+    "server": {
+      "type": "boolean",
+      "default": true,
+      "description": "bundle server-overrides"
+    },
+    "overrides": {
+      "type": "string",
+      "default": "overrides",
+      "description": "folder zipped into overrides/ inside the .mrpack"
+    },
+    "clientOverrides": {
+      "type": "string",
+      "default": "client-overrides",
+      "description": "folder zipped into client-overrides/"
+    },
+    "serverOverrides": {
+      "type": "string",
+      "default": "server-overrides",
+      "description": "folder zipped into server-overrides/"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/package"
+      }
+    }
+  },
+  "$defs": {
+    "support": {
+      "enum": [
+        "required",
+        "optional",
+        "unsupported"
+      ],
+      "description": "required forces the file on, optional leaves it to the user, unsupported hides it"
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/support"
+        },
+        "server": {
+          "$ref": "#/$defs/support"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "mod",
+            "resourcepack",
+            "shader",
+            "datapack"
+          ],
+          "description": "decides the folder the file lands in inside the .mrpack"
+        },
+        "project": {
+          "type": "string",
+          "description": "the modrinth slug, for example sodium"
+        },
+        "id": {
+          "type": "string",
+          "description": "the modrinth project id"
+        },
+        "version": {
+          "type": "string",
+          "description": "one version for every target, cannot be combined with versions"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "the embedded mod ids this project has been seen identifying as, used to confirm updates are still the same mod"
+        },
+        "versions": {
+          "type": "object",
+          "description": "a version per target, keys are tried in order: minecraft+loader, minecraft, default, *",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "examples": [
+            {
+              "1.21.11+fabric": "0.6.0",
+              "1.21.8+fabric": "0.5.3"
+            }
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/env"
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "shorthand for an optional client env"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "resource packs and shaders only, which becomes active if it is when building the modpack"
+        },
+        "lock": {
+          "type": "boolean",
+          "description": "keep this package pinned at exactly this version, updates and auto-fixes leave it alone"
+        },
+        "position": {
+          "enum": [
+            "top",
+            "bottom"
+          ],
+          "description": "where an active pack sits in the resource pack stack, defaults to top"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "project"
+          ]
+        },
+        {
+          "required": [
+            "id"
+          ]
+        }
+      ]
+    }
+  }
+}
