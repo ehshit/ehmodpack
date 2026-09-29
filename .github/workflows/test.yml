@@ -29,6 +29,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Keyring
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
       - name: Is the commit fron a PR?
         id: detect
         shell: bash
@@ -86,10 +90,13 @@ jobs:
               console.log('an issue for this is already open, skipping');
               return;
             }
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: 'tests failed on main',
-              body,
-              assignees: ['huhuhuheh'],
-            });
+            try {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'tests failed on main',
+                body,
+              });
+            } catch (err) {
+              core.warning('could not open the issue: ' + err.message);
+            }
