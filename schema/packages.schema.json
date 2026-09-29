@@ -138,6 +138,24 @@
             }
           ]
         },
+        "skip": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Skips this package from being used in this version, for all target (<gamever>) or for a loader one (<game+loader>)",
+          "examples": [
+            [
+              "1.21.11+fabric"
+            ],
+            [
+              "1.20.1"
+            ],
+            [
+              "*"
+            ]
+          ]
+        },
         "env": {
           "$ref": "#/$defs/env"
         },

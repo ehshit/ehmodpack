@@ -172,6 +172,12 @@ pub fn check(
                 r.warn(format!("{} has an odd versions key {key:?}", pkg.key()));
             }
         }
+        for key in &pkg.skip {
+            let mc = key.split('+').next().unwrap_or(key);
+            if key != "*" && key != "default" && !mc.starts_with('1') {
+                r.warn(format!("{} has an odd skip key {key:?}", pkg.key()));
+            }
+        }
     }
 
     if manifest.packages.is_empty() {

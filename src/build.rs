@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -8,6 +8,79 @@ use serde_json::json;
 use crate::lock::{Lock, LockedTarget};
 
 pub const INTERNAL_PACK: &str = "fabric-resource-pack-v0";
+
+pub fn pack_format_for(minecraft: &str) -> Option<u32> {
+    Some(match minecraft {
+        "1.19" | "1.19.1" | "1.19.2" => 9,
+        "1.19.3" => 12,
+        "1.19.4" => 13,
+        "1.20" | "1.20.1" => 15,
+        "1.20.2" => 18,
+        "1.20.3" | "1.20.4" => 22,
+        "1.20.5" | "1.20.6" => 32,
+        "1.21" | "1.21.1" => 34,
+        "1.21.2" | "1.21.3" => 42,
+        "1.21.4" => 46,
+        "1.21.5" => 55,
+        "1.21.6" => 63,
+        "1.21.7" | "1.21.8" => 64,
+        "1.21.9" | "1.21.10" => 69,
+        "1.21.11" => 75,
+        "26.1" | "26.1.1" | "26.1.2" => 84,
+        "26.2" => 88,
+        "26.3" => 97,
+        _ => return None,
+    })
+}
+
+fn is_resource_pack(rel: &str) -> bool {
+    rel.contains("resourcepacks/")
+}
+
+fn patch_mcmeta(bytes: &[u8], format: u32) -> Option<Vec<u8>> {
+    let mut doc: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let pack = doc.get_mut("pack")?.as_object_mut()?;
+    pack.insert("pack_format".to_string(), json!(format));
+    if let Some(min) = pack.get("min_format").and_then(|v| v.as_u64()) {
+        if min > format as u64 {
+            pack.insert("min_format".to_string(), json!(format));
+        }
+    }
+    if let Some(max) = pack.get("max_format").and_then(|v| v.as_u64()) {
+        if max < format as u64 {
+            pack.insert("max_format".to_string(), json!(format));
+        }
+    }
+    serde_json::to_vec_pretty(&doc).ok()
+}
+
+fn patch_zip_mcmeta(bytes: &[u8], format: u32) -> Option<Vec<u8>> {
+    let mut src = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+    let names: Vec<String> = (0..src.len())
+        .filter_map(|i| src.by_index(i).ok().map(|f| f.name().to_string()))
+        .filter(|n| n.ends_with("pack.mcmeta"))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let opts: zip::write::FileOptions<()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for i in 0..src.len() {
+        let mut file = src.by_index(i).ok()?;
+        let name = file.name().to_string();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).ok()?;
+        if names.contains(&name) {
+            if let Some(fixed) = patch_mcmeta(&data, format) {
+                data = fixed;
+            }
+        }
+        out.start_file(name, opts).ok()?;
+        out.write_all(&data).ok()?;
+    }
+    out.finish().ok().map(|c| c.into_inner())
+}
 
 pub fn mrpack_index(lock: &Lock, target: &LockedTarget) -> serde_json::Value {
     let files: Vec<serde_json::Value> = target
@@ -105,6 +178,16 @@ pub fn build(
             if rel == "options.txt" {
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 bytes = inject_active(&text, &active_files, &local).into_bytes();
+            } else if let Some(format) = pack_format_for(&target.minecraft) {
+                if rel.ends_with("pack.mcmeta") && is_resource_pack(&rel) {
+                    if let Some(fixed) = patch_mcmeta(&bytes, format) {
+                        bytes = fixed;
+                    }
+                } else if rel.ends_with(".zip") && is_resource_pack(&rel) {
+                    if let Some(fixed) = patch_zip_mcmeta(&bytes, format) {
+                        bytes = fixed;
+                    }
+                }
             }
             zip.start_file(format!("{prefix}/{rel}"), options)?;
             zip.write_all(&bytes)?;

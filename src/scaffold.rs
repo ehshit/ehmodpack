@@ -234,6 +234,7 @@ pub async fn new(
                     None
                 },
                 versions: if single { BTreeMap::new() } else { versions },
+                skip: Vec::new(),
                 env: None,
                 optional: None,
                 active: None,

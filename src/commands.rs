@@ -1488,6 +1488,7 @@ async fn add_dep_tree(
         id: None,
         version: flat,
         versions: spread,
+        skip: Vec::new(),
         env: None,
         optional: None,
         active: matches!(kind, PkgType::Resourcepack).then_some(false),
@@ -1868,6 +1869,13 @@ async fn do_lock(
         let mut missing: Vec<String> = Vec::new();
         let mut deps: Vec<crate::modrinth::VersionDependency> = Vec::new();
         for (i, pkg) in p.manifest.packages.iter().enumerate() {
+            if pkg.is_skipped(&target.minecraft, &target.loader.kind) {
+                detail(
+                    cli,
+                    &format!("{} is skipped (which will not include in the modpack)", pkg.key()),
+                );
+                continue;
+            }
             steps.at(i + 1, &pkg.key());
             match resolve_one(&client, target, pkg).await {
                 Ok(found) => {
@@ -1986,6 +1994,7 @@ fn add_dep_pin(
         id: None,
         version: if single { Some(version.to_string()) } else { None },
         versions,
+        skip: Vec::new(),
         env: None,
         optional: None,
         active: None,
@@ -2079,6 +2088,21 @@ async fn pull_deps(
             );
             continue;
         }
+        if let Some(declared) = manifest
+            .packages
+            .iter()
+            .find(|p| p.key().eq_ignore_ascii_case(&slug))
+        {
+            if declared.is_skipped(&target.minecraft, &target.loader.kind) {
+                warn(
+                    cli,
+                    &format!(
+                        "{slug} was supposed to be a required dependency but it was skipped because of the configuration file"
+                    ),
+                );
+                continue;
+            }
+        }
         if packages.iter().any(|lp| lp.project.eq_ignore_ascii_case(&slug))
             || visited.contains(&slug.to_ascii_lowercase())
         {
@@ -2100,6 +2124,7 @@ async fn pull_deps(
             id: None,
             version: if single { Some(version_number.clone()) } else { None },
             versions,
+            skip: Vec::new(),
             env: None,
             optional: None,
             active: None,
@@ -2488,6 +2513,7 @@ async fn new_from_mrpack(
             id: None,
             version: Some(v.version_number.clone()),
             versions: BTreeMap::new(),
+            skip: Vec::new(),
             env: Some(f.env),
             optional: Some(f.env.client == Support::Optional),
             active: None,
@@ -2753,6 +2779,14 @@ async fn update_cmd(
             }
             if p.manifest.packages[idx].is_locked() {
                 detail(cli, &format!("{slug} is locked, update ignores it"));
+                continue;
+            }
+            if p.manifest.packages[idx].is_skipped(&target.minecraft, &target.loader.kind) {
+                skipped.push((
+                    slug.clone(),
+                    target.label(),
+                    "thing was skipped".to_string(),
+                ));
                 continue;
             }
             let kind = p.manifest.packages[idx].kind;
@@ -3817,6 +3851,14 @@ async fn fix_loader(
             if p.manifest.packages[idx].is_locked() {
                 continue;
             }
+            if p.manifest.packages[idx].is_skipped(&target.minecraft, &target.loader.kind) {
+                rows.push(vec![
+                    slug,
+                    "skipped".to_string(),
+                    "not on this target".to_string(),
+                ]);
+                continue;
+            }
             let Ok(project) = client.project(&slug).await else {
                 rows.push(vec![slug, "?".to_string(), "not on modrinth".to_string()]);
                 continue;
@@ -4622,6 +4664,7 @@ fn set_pin(manifest: &mut Manifest, slug: &str, key: &str, version: &str, single
         id: None,
         version: if single { Some(version.to_string()) } else { None },
         versions: if single { BTreeMap::new() } else { versions },
+        skip: Vec::new(),
         env: None,
         optional: None,
         active: None,

@@ -228,6 +228,7 @@ fn spread_package() -> Package {
         id: None,
         version: None,
         versions,
+        skip: Vec::new(),
         env: None,
         optional: None,
         active: None,
@@ -267,6 +268,104 @@ fn a_plain_version_shorthand_beats_everything() {
     let mut p = spread_package();
     p.version = Some("9.9.9".to_string());
     assert_eq!(p.version_for("1.21.8", "fabric").as_deref(), Some("9.9.9"));
+}
+
+#[test]
+fn nothing_is_skipped_without_the_field() {
+    let p = spread_package();
+    assert!(!p.is_skipped("1.21.11", "fabric"));
+    assert!(!p.is_skipped("1.20.1", "neoforge"));
+}
+
+#[test]
+fn skip_beats_the_exact_target_key() {
+    let mut p = spread_package();
+    p.skip = vec!["1.21.11+fabric".to_string()];
+    assert!(p.is_skipped("1.21.11", "fabric"));
+    assert!(!p.is_skipped("1.21.11", "quilt"));
+    assert!(!p.is_skipped("1.21.8", "fabric"));
+}
+
+#[test]
+fn a_bare_minecraft_key_skips_every_loader_on_it() {
+    let mut p = spread_package();
+    p.skip = vec!["1.21.8".to_string()];
+    assert!(p.is_skipped("1.21.8", "fabric"));
+    assert!(p.is_skipped("1.21.8", "quilt"));
+    assert!(p.is_skipped("1.21.8", "neoforge"));
+    assert!(!p.is_skipped("1.21.11", "fabric"));
+}
+
+#[test]
+fn a_loader_wildcard_skips_one_game_version() {
+    let mut p = spread_package();
+    p.skip = vec!["1.21.11+*".to_string()];
+    assert!(p.is_skipped("1.21.11", "fabric"));
+    assert!(p.is_skipped("1.21.11", "neoforge"));
+    assert!(!p.is_skipped("1.21.8", "fabric"));
+}
+
+#[test]
+fn a_star_skips_the_package_everywhere() {
+    let mut p = spread_package();
+    p.skip = vec!["*".to_string()];
+    assert!(p.is_skipped("1.21.11", "fabric"));
+    assert!(p.is_skipped("1.20.1", "quilt"));
+    assert!(p.is_skipped("26.2", "neoforge"));
+}
+
+#[test]
+fn default_skips_a_single_target_pack() {
+    let mut p = spread_package();
+    p.skip = vec!["default".to_string()];
+    assert!(p.is_skipped("1.21.11", "fabric"));
+    assert!(p.is_skipped("1.20.1", "quilt"));
+}
+
+#[test]
+fn skip_beats_a_plain_version_too() {
+    let mut p = spread_package();
+    p.version = Some("9.9.9".to_string());
+    p.skip = vec!["1.21.8".to_string()];
+    assert!(p.is_skipped("1.21.8", "fabric"));
+    assert_eq!(p.version_for("1.21.8", "fabric").as_deref(), Some("9.9.9"));
+}
+
+#[test]
+fn skip_ignores_case_and_padding() {
+    let mut p = spread_package();
+    p.skip = vec![" 1.21.11+Fabric ".to_string()];
+    assert!(p.is_skipped("1.21.11", "fabric"));
+}
+
+#[test]
+fn skip_survives_a_manifest_round_trip() -> anyhow::Result<()> {
+    let m = Manifest::parse(
+        r#"{"name":"x","packages":[{"type":"mod","project":"sodium","skip":["1.21.11+fabric","*"]}]}"#,
+    )?;
+    let p = &m.packages[0];
+    assert!(p.is_skipped("1.21.11", "fabric"));
+    assert!(p.is_skipped("1.20.1", "quilt"));
+    let back = Manifest::parse(&m.to_json())?;
+    assert!(back.packages[0].is_skipped("1.20.1", "quilt"));
+    Ok(())
+}
+
+#[test]
+fn an_empty_skip_is_not_written_out() -> anyhow::Result<()> {
+    let m = Manifest::parse(r#"{"name":"x","packages":[{"type":"mod","project":"sodium"}]}"#)?;
+    assert!(!m.to_json().contains("skip"));
+    Ok(())
+}
+
+#[test]
+fn a_changed_skip_moves_the_fingerprint() -> anyhow::Result<()> {
+    let a = Manifest::parse(r#"{"name":"x","packages":[{"type":"mod","project":"sodium"}]}"#)?;
+    let b = Manifest::parse(
+        r#"{"name":"x","packages":[{"type":"mod","project":"sodium","skip":["1.21.11"]}]}"#,
+    )?;
+    assert_ne!(a.fingerprint(), b.fingerprint());
+    Ok(())
 }
 
 fn soft(targets: &[(&str, &str)]) -> Softwares {

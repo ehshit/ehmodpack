@@ -211,18 +211,20 @@ pub struct Package {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub versions: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<Env>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optional: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
-#[serde(default, skip_serializing_if = "Option::is_none")]
-pub position: Option<RpPosition>,
-#[serde(default, skip_serializing_if = "Option::is_none")]
-pub ids: Option<Vec<String>>,
-#[serde(default, skip_serializing_if = "Option::is_none")]
-pub lock: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<RpPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<bool>,
 }
 
 impl Package {
@@ -269,6 +271,22 @@ impl Package {
         self.version_keys(minecraft, loader)
             .iter()
             .find_map(|key| self.versions.get(key).cloned())
+    }
+
+    pub fn is_skipped(&self, minecraft: &str, loader: &str) -> bool {
+        if self.skip.is_empty() {
+            return false;
+        }
+        let keys = [
+            format!("{minecraft}+{loader}"),
+            format!("{minecraft}+*"),
+            minecraft.to_string(),
+            "default".to_string(),
+            "*".to_string(),
+        ];
+        self.skip
+            .iter()
+            .any(|raw| keys.iter().any(|key| key.eq_ignore_ascii_case(raw.trim())))
     }
 
     pub fn knows(&self, id: &str) -> bool {
