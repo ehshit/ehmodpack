@@ -177,6 +177,8 @@ jobs:
                        "$top/root/usr/share/applications"
               cp "$bin" "$top/SOURCES/ehmodpack"
               cp LICENSE "$top/SOURCES/LICENSE"
+              cp "$icon" "$top/SOURCES/ehmodpack.png"
+              cp "$desktop" "$top/SOURCES/ehmodpack.desktop"
               cat > "$top/SPECS/ehmodpack.spec" <<EOF
           Name: ehmodpack
           Version: $version
@@ -186,14 +188,20 @@ jobs:
           URL: https://github.com/ehshit/ehmodpack
           Source0: ehmodpack
           Source1: LICENSE
+          Source2: ehmodpack.png
+          Source3: ehmodpack.desktop
           %description
           Build, lock and publish Minecraft modpacks from ehmodpack itself.
           %install
           install -Dm0755 %{SOURCE0} %{buildroot}/usr/bin/ehmodpack
           install -Dm0644 %{SOURCE1} %{buildroot}/usr/share/doc/ehmodpack/LICENSE
+          install -Dm0644 %{SOURCE2} %{buildroot}/usr/share/icons/hicolor/256x256/apps/ehmodpack.png
+          install -Dm0644 %{SOURCE3} %{buildroot}/usr/share/applications/ehmodpack.desktop
           %files
           /usr/bin/ehmodpack
           /usr/share/doc/ehmodpack/LICENSE
+          /usr/share/icons/hicolor/256x256/apps/ehmodpack.png
+          /usr/share/applications/ehmodpack.desktop
           %changelog
           * $rpmdate $maintainer - $version-1
           - initial package
@@ -234,6 +242,7 @@ jobs:
           done
 
           rm -rf bin debroot rpmtop
+          rm -f out/ehmodpack.desktop
           ls -la out
       - uses: actions/upload-artifact@v4
         with:
@@ -249,7 +258,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          path: downloads
           pattern: ehmodpack-*
           merge-multiple: true
       - name: Decide the version and the tag
@@ -266,9 +275,57 @@ jobs:
       - name: Write the release notes
         shell: bash
         run: |
-          python3 - "${{ steps.version.outputs.version }}" > RELEASE_BODY.md <<'EOF'
-          import tomllib, subprocess, sys
+          python3 - "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.tag }}" > RELEASE_BODY.md <<'EOF'
+          import os, tomllib, subprocess, sys
           version = sys.argv[1]
+          tag = sys.argv[2]
+          repo = os.environ.get("GITHUB_REPOSITORY", "ehshit/ehmodpack")
+          base = "https://github.com/" + repo + "/releases/download/" + tag + "/"
+          try:
+              have = set(os.listdir("downloads"))
+          except OSError:
+              have = set()
+          def link(name, label=None):
+              return "[" + (label or name) + "](" + base + name + ")"
+          archives = [
+              ("Windows x64", "ehmodpack-windows-x86_64.zip"),
+              ("Linux x64", "ehmodpack-linux-x86_64.tar.gz"),
+              ("Linux ARM64", "ehmodpack-linux-aarch64.tar.gz"),
+              ("Linux ARMv7", "ehmodpack-linux-armv7.tar.gz"),
+              ("Linux i686", "ehmodpack-linux-i686.tar.gz"),
+              ("Linux PowerPC64 LE", "ehmodpack-linux-powerpc64le.tar.gz"),
+              ("Linux RISC-V 64", "ehmodpack-linux-riscv64gc.tar.gz"),
+              ("Linux s390x", "ehmodpack-linux-s390x.tar.gz"),
+          ]
+          rows = ["| System | Download |", "| --- | --- |"]
+          for label, name in archives:
+              if name in have:
+                  rows.append("| " + label + " | " + link(name, "Download") + " |")
+          deb = {
+              "x64": "amd64", "ARM64": "arm64", "ARMv7": "armhf",
+              "i686": "i386", "PowerPC64 LE": "ppc64el",
+              "RISC-V 64": "riscv64", "s390x": "s390x",
+          }
+          rpm = {
+              "x64": "x86_64", "ARM64": "aarch64", "ARMv7": "armv7hl",
+              "i686": "i686", "PowerPC64 LE": "ppc64le", "s390x": "s390x",
+          }
+          prows = ["| System | deb | rpm |", "| --- | --- | --- |"]
+          for label, code in deb.items():
+              dname = "ehmodpack-" + version + "-" + code + ".deb"
+              rcode = rpm.get(label)
+              rname = "ehmodpack-" + version + "-" + rcode + ".rpm" if rcode else None
+              dcell = link(dname, "Download") if dname in have else "-"
+              rcell = link(rname, "Download") if rname in have else "-"
+              prows.append("| " + label + " | " + dcell + " | " + rcell + " |")
+          appimgs = sorted(n for n in have if n.endswith(".AppImage"))
+          extra = []
+          if len(rows) > 2:
+              extra.append("## Downloads\n\n" + "\n".join(rows))
+          if len(prows) > 2:
+              extra.append("## Linux packages\n\n" + "\n".join(prows))
+          if appimgs:
+              extra.append("## AppImages\n\n" + "\n".join("- " + link(n) for n in appimgs))
           out = []
           entries = []
           try:
@@ -306,6 +363,7 @@ jobs:
                   capture_output=True, text=True, check=False,
               ).stdout
               commits = [l for l in raw.splitlines() if l.strip()]
+          out.extend(extra)
           out.append("## Recent Commits")
           out.extend("- " + c for c in commits)
           print("\n".join(out))
@@ -318,13 +376,13 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             if [ "${{ github.ref_type }}" = "tag" ]; then
               gh release edit "$tag" --notes-file RELEASE_BODY.md
-              gh release upload "$tag" assets/* --clobber
+              gh release upload "$tag" downloads/* --clobber
             else
               echo "release $tag already exists and this push did not bump the version, skipping"
               exit 0
             fi
           else
             gh release create "$tag" --generate-notes=false --notes-file RELEASE_BODY.md
-            gh release upload "$tag" assets/* --clobber
+            gh release upload "$tag" downloads/* --clobber
           fi
           gh release view "$tag"
