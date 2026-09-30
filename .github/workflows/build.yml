@@ -43,6 +43,7 @@ jobs:
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
+          package: libdbus-1-dev
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Bundle
