@@ -53,10 +53,6 @@ jobs:
           mkdir -p bundle
           if [ "$RUNNER_OS" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/ehmodpack.exe" "bundle/$bin"
-            wicon="$(grep -m1 '^icon-windows' Cargo.toml | cut -d= -f2- | tr -d '"' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-            if [ -n "$wicon" ] && [ -f "$wicon" ]; then
-              cp "$wicon" "bundle/ehmodpack.ico"
-            fi
             powershell -NoProfile -Command \
               "Compress-Archive -Force -Path 'bundle/$bin' -DestinationPath 'bundle/ehmodpack-${{ matrix.arch }}.zip'"
           else
@@ -145,6 +141,7 @@ jobs:
             deb="$(deb_arch "$arch")"
             if [ -n "$deb" ]; then
               root="debroot/$deb"
+              mkdir -p "$root/DEBIAN"
               install -Dm755 "$bin" "$root/usr/bin/ehmodpack"
               install -Dm644 "$icon" "$root/usr/share/icons/hicolor/256x256/apps/ehmodpack.png"
               install -Dm644 "$desktop" "$root/usr/share/applications/ehmodpack.desktop"

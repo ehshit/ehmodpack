@@ -15,7 +15,6 @@ icon = ".github/icon/icon.png"
 icon-windows = ".github/icon/icon-windows.ico"
 package-description = "Build, Create, and Publish Modrinth Modpacks with eh's modpacks"
 
-
 [lib]
 name = "ehmodpack"
 path = "src/lib.rs"
@@ -52,6 +51,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 wiremock = "0.6"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [profile.release]
 opt-level = "z"
