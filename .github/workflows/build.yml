@@ -86,6 +86,8 @@ jobs:
           echo "version=$version"
           echo "maintainer=$maintainer"
           echo "desc=$desc"
+          rpmdate="$(LC_ALL=C date '+%a %b %d %Y')"
+          echo "rpmdate=$rpmdate"
           mkdir -p out
 
           icon="$(grep -m1 '^icon = ' Cargo.toml | cut -d= -f2- | tr -d '"' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -182,16 +184,18 @@ jobs:
           Summary: $desc
           License: MIT
           URL: https://github.com/ehshit/ehmodpack
+          Source0: ehmodpack
+          Source1: LICENSE
           %description
           Build, lock and publish Minecraft modpacks from ehmodpack itself.
           %install
-          install -Dm0755 %{SOURCEP0} %{buildroot}/usr/bin/ehmodpack
-          install -Dm0644 %{SOURCEP1} %{buildroot}/usr/share/doc/ehmodpack/LICENSE
+          install -Dm0755 %{SOURCE0} %{buildroot}/usr/bin/ehmodpack
+          install -Dm0644 %{SOURCE1} %{buildroot}/usr/share/doc/ehmodpack/LICENSE
           %files
           /usr/bin/ehmodpack
           /usr/share/doc/ehmodpack/LICENSE
           %changelog
-          * Thu Jan 01 1970 ehmodpack <ehmodpack@localhost> - $version-1
+          * $rpmdate $maintainer - $version-1
           - initial package
           EOF
               sed -i 's/^          //' "$top/SPECS/ehmodpack.spec"
