@@ -158,6 +158,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             loader,
             no_download,
         } => sync_pack_active(&cli, &api, mc.as_deref(), *loader, *no_download).await,
+        Cmd::Order {
+            mc,
+            loader,
+            off,
+            packs,
+        } => order_cmd(&cli, mc.as_deref(), *loader, *off, packs.clone()),
         Cmd::FixLoader {
             mc,
             loader,
@@ -324,10 +330,13 @@ async fn unsupported_note(client: &Modrinth, key: &str, target: &Target) -> Stri
     )
 }
 
-fn to_locked(p: &Package, r: &Resolved) -> LockedPackage {
+fn to_locked(p: &Package, r: &Resolved, target: &Target) -> LockedPackage {
     let stackable = matches!(p.kind, PkgType::Resourcepack | PkgType::Shader);
     let position = if stackable && p.is_active() {
-        Some(p.position.unwrap_or(RpPosition::Top))
+        Some(
+            p.position_for(&target.minecraft, &target.loader.kind)
+                .unwrap_or_default(),
+        )
     } else {
         None
     };
@@ -1493,6 +1502,7 @@ async fn add_dep_tree(
         optional: None,
         active: matches!(kind, PkgType::Resourcepack).then_some(false),
         position: None,
+        positions: BTreeMap::new(),
         ids,
         lock: None,
     });
@@ -1879,7 +1889,7 @@ async fn do_lock(
             steps.at(i + 1, &pkg.key());
             match resolve_one(&client, target, pkg).await {
                 Ok(found) => {
-                    packages.push(to_locked(pkg, &found));
+                    packages.push(to_locked(pkg, &found, target));
                     deps.extend(found.version.dependencies.iter().cloned());
                 }
                 Err(_) => {
@@ -1918,6 +1928,17 @@ async fn do_lock(
                 java: target.java.clone(),
                 loader: target.loader.clone(),
                 packages,
+                external_packs: p
+                    .manifest
+                    .external_packs
+                    .iter()
+                    .map(|e| crate::lock::LockedExternal {
+                        name: e.name.clone(),
+                        active: e.is_active(),
+                        builtin: e.is_builtin(),
+                        position: e.position_for(&target.minecraft, &target.loader.kind),
+                    })
+                    .collect(),
             },
         );
     }
@@ -1999,6 +2020,7 @@ fn add_dep_pin(
         optional: None,
         active: None,
         position: None,
+        positions: BTreeMap::new(),
         ids: None,
         lock: None,
     });
@@ -2129,10 +2151,11 @@ async fn pull_deps(
             optional: None,
             active: None,
             position: None,
+            positions: BTreeMap::new(),
             ids: None,
             lock: None,
         };
-        packages.push(to_locked(&dep_pkg, &resolved));
+        packages.push(to_locked(&dep_pkg, &resolved, target));
         add_dep_pin(manifest, kind, &slug, &key, &version_number, single);
         pulled.push(slug);
     }
@@ -2518,6 +2541,7 @@ async fn new_from_mrpack(
             optional: Some(f.env.client == Support::Optional),
             active: None,
             position: None,
+            positions: BTreeMap::new(),
             ids: None,
             lock: None,
         });
@@ -2551,6 +2575,7 @@ async fn new_from_mrpack(
         client_overrides: manifest::DEFAULT_CLIENT_OVERRIDES.to_string(),
         server_overrides: manifest::DEFAULT_SERVER_OVERRIDES.to_string(),
         packages,
+        external_packs: Vec::new(),
     };
     let mut softwares = Softwares {
         schema: None,
@@ -3714,7 +3739,7 @@ async fn sync_pack_active(
         for pkg in &mut target.packages {
             let is_pack = matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader);
             let want = is_pack && on.contains(&pkg.project);
-            let next = if want { Some(RpPosition::Top) } else { None };
+            let next = if want { Some(RpPosition::default()) } else { None };
             if pkg.position != next {
                 pkg.position = next;
                 if want {
@@ -4669,6 +4694,7 @@ fn set_pin(manifest: &mut Manifest, slug: &str, key: &str, version: &str, single
         optional: None,
         active: None,
         position: None,
+        positions: BTreeMap::new(),
         ids: None,
         lock: None,
     });
@@ -5156,6 +5182,723 @@ async fn validate_cmd(cli: &Cli) -> Result<()> {
     check_schema(cli, &p);
     Ok(())
 }
+fn order_target_key(mc: Option<&str>, loader: Option<LoaderKind>) -> Option<String> {
+    match (mc, loader) {
+        (None, None) => None,
+        (Some(mc), None) => Some(mc.to_string()),
+        (mc, Some(loader)) => Some(format!("{}+{}", mc?, loader.as_str())),
+    }
+}
+
+fn parse_position(raw: &str) -> Result<Option<RpPosition>> {
+    let want = raw.trim();
+    if want.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(n) = want.parse::<u32>() {
+        if n == 0 {
+            bail!("a position of 0 is not a thing, 1 is the top of the stack");
+        }
+        return Ok(Some(RpPosition::At(n)));
+    }
+    match want.to_ascii_lowercase().as_str() {
+        "top" => Ok(Some(RpPosition::Named(manifest::RpNamed::Top))),
+        "bottom" => Ok(Some(RpPosition::Named(manifest::RpNamed::Bottom))),
+        "off" | "none" => Ok(None),
+        other => bail!("{other:?} is not a position, use a number like 1, or top or bottom"),
+    }
+}
+
+fn order_entries(
+    p: &Project,
+    target: &Target,
+    lock: Option<&Lock>,
+) -> Vec<(String, Option<RpPosition>)> {
+    let mut out: Vec<(String, Option<RpPosition>)> = Vec::new();
+    for pkg in &p.manifest.packages {
+        if !matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader) {
+            continue;
+        }
+        let position = pkg.position_for(&target.minecraft, &target.loader.kind);
+        if position.is_none() && !pkg.is_active() {
+            continue;
+        }
+        let name = lock
+            .and_then(|l| {
+                l.targets
+                    .iter()
+                    .find(|t| {
+                        t.minecraft == target.minecraft && t.loader.kind == target.loader.kind
+                    })
+                    .and_then(|t| {
+                        t.packages
+                            .iter()
+                            .find(|lp| lp.project.eq_ignore_ascii_case(&pkg.key()))
+                            .map(|lp| {
+                                lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string()
+                            })
+                    })
+            })
+            .unwrap_or_else(|| pkg.key());
+        out.push((name, position));
+    }
+    for pack in &p.manifest.external_packs {
+        let position = pack.position_for(&target.minecraft, &target.loader.kind);
+        if position.is_none() && !pack.is_active() {
+            continue;
+        }
+        out.push((pack.entry(), position));
+    }
+    for (id, _) in manifest::builtin_packs_for(&target.loader.kind) {
+        if p
+            .manifest
+            .external_packs
+            .iter()
+            .any(|e| e.name.eq_ignore_ascii_case(id))
+        {
+            continue;
+        }
+        out.push((id.to_string(), None));
+    }
+    out.sort_by(|a, b| {
+        b.1.unwrap_or_default()
+            .rank()
+            .cmp(&a.1.unwrap_or_default().rank())
+    });
+    out
+}
+
+fn looks_like_position(raw: &str) -> bool {
+    let want = raw.trim();
+    if want.is_empty() {
+        return false;
+    }
+    want.parse::<u32>().is_ok()
+        || matches!(want.to_ascii_lowercase().as_str(), "top" | "bottom" | "off")
+}
+
+fn order_specs(packs: &[String], off: bool) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < packs.len() {
+        let token = &packs[i];
+        if off {
+            out.push((token.trim().to_string(), String::new()));
+            i += 1;
+        } else if let Some((name, value)) = token.rsplit_once('=') {
+            out.push((name.trim().to_string(), value.to_string()));
+            i += 1;
+        } else if i + 1 < packs.len() && looks_like_position(&packs[i + 1]) {
+            out.push((token.trim().to_string(), packs[i + 1].clone()));
+            i += 2;
+        } else {
+            bail!("{token:?} needs a position, like {token}=1 or {token} 1");
+        }
+    }
+    Ok(out)
+}
+
+const ORDER_SAVE: &str = "save and exit";
+const ORDER_CLEAR: &str = "clear every position on these targets";
+
+fn order_pos_label(position: Option<RpPosition>) -> String {
+    match position {
+        None => "off".to_string(),
+        Some(RpPosition::At(n)) => n.to_string(),
+        Some(RpPosition::Named(manifest::RpNamed::Bottom)) => "bottom".to_string(),
+        Some(RpPosition::Named(manifest::RpNamed::Top)) => "top".to_string(),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OrderEntry {
+    name: String,
+    external: bool,
+}
+
+fn locked_pack_name(lock: Option<&Lock>, target: &Target, slug: &str) -> Option<String> {
+    lock.and_then(|l| {
+        l.targets
+            .iter()
+            .find(|t| t.minecraft == target.minecraft && t.loader.kind == target.loader.kind)
+            .and_then(|t| {
+                t.packages
+                    .iter()
+                    .find(|lp| lp.project.eq_ignore_ascii_case(slug))
+                    .map(|lp| lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string())
+            })
+    })
+}
+
+fn order_choices(
+    p: &Project,
+    targets: &[Target],
+    lock: Option<&Lock>,
+    on_disk: &[String],
+) -> Vec<(String, OrderEntry)> {
+    let first = targets.first();
+    let mut out: Vec<(String, OrderEntry)> = Vec::new();
+    for pkg in &p.manifest.packages {
+        if !matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader) {
+            continue;
+        }
+        let resolved = first.and_then(|t| pkg.position_for(&t.minecraft, &t.loader.kind));
+        let file = first
+            .and_then(|t| locked_pack_name(lock, t, &pkg.key()))
+            .unwrap_or_else(|| pkg.key());
+        let tag = if file.eq_ignore_ascii_case(&pkg.key()) {
+            String::new()
+        } else {
+            format!("   ({})", pkg.key())
+        };
+        out.push((
+            format!("{:<5} {}{tag}", order_pos_label(resolved), file),
+            OrderEntry {
+                name: pkg.key(),
+                external: false,
+            },
+        ));
+    }
+    let loader = first.map(|t| t.loader.kind.clone()).unwrap_or_default();
+    let builtins = manifest::builtin_packs_for(&loader);
+    let label_of = |id: &str| -> String {
+        builtins
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(id))
+            .map(|(_, l)| (*l).to_string())
+            .unwrap_or_else(|| id.to_string())
+    };
+    for pack in &p.manifest.external_packs {
+        let resolved = first.and_then(|t| pack.position_for(&t.minecraft, &t.loader.kind));
+        let shown = if pack.is_builtin() {
+            label_of(&pack.name)
+        } else {
+            pack.name.clone()
+        };
+        out.push((
+            format!(
+                "{:<5} {}{}",
+                order_pos_label(resolved),
+                shown,
+                match (pack.is_builtin(), pack.is_active()) {
+                    (true, true) => "   (built-in pack)",
+                    (true, false) => "   (built-in pack, off)",
+                    (false, true) => "",
+                    (false, false) => "   (off)",
+                }
+            ),
+            OrderEntry {
+                name: pack.name.clone(),
+                external: true,
+            },
+        ));
+    }
+    for (id, label) in &builtins {
+        if p
+            .manifest
+            .external_packs
+            .iter()
+            .any(|e| e.name.eq_ignore_ascii_case(id))
+        {
+            continue;
+        }
+        out.push((
+            format!("{:<5} {label}   (built-in pack)", order_pos_label(None)),
+            OrderEntry {
+                name: id.to_string(),
+                external: true,
+            },
+        ));
+    }
+    for file in on_disk {
+        if p
+            .manifest
+            .external_packs
+            .iter()
+            .any(|e| e.name.eq_ignore_ascii_case(file))
+        {
+            continue;
+        }
+        out.push((
+            format!("{:<5} {file}   (in the folder, not in the manifest)", order_pos_label(None)),
+            OrderEntry {
+                name: file.clone(),
+                external: true,
+            },
+        ));
+    }
+    out
+}
+
+fn set_order_on(
+    p: &mut Project,
+    entry: &OrderEntry,
+    scope: &[Option<String>],
+    targets: &[Target],
+    position: Option<RpPosition>,
+    cli: &Cli,
+) {
+    if !entry.external {
+        for pkg in p.manifest.packages.iter_mut() {
+            if !pkg.key().eq_ignore_ascii_case(&entry.name) {
+                continue;
+            }
+            if position.is_some() {
+                pkg.active = Some(true);
+            }
+            set_positions(&mut pkg.position, &mut pkg.positions, scope, position);
+        }
+    } else {
+        let found = p
+            .manifest
+            .external_packs
+            .iter_mut()
+            .find(|e| e.name.eq_ignore_ascii_case(&entry.name));
+        match found {
+            Some(pack) => {
+                if position.is_some() {
+                    pack.active = Some(true);
+                }
+                set_positions(&mut pack.position, &mut pack.positions, scope, position);
+            }
+            None => {
+                let loader = targets
+                    .first()
+                    .map(|t| t.loader.kind.clone())
+                    .unwrap_or_default();
+                let builtin = manifest::builtin_packs_for(&loader)
+                    .iter()
+                    .any(|(id, _)| id.eq_ignore_ascii_case(&entry.name));
+                let mut pack = manifest::ExternalPack {
+                    name: entry.name.clone(),
+                    active: Some(position.is_some()),
+                    builtin: if builtin { Some(true) } else { None },
+                    position: None,
+                    positions: BTreeMap::new(),
+                };
+                set_positions(&mut pack.position, &mut pack.positions, scope, position);
+                p.manifest.external_packs.push(pack);
+            }
+        }
+    }
+    let where_ = if scope.iter().any(|k| k.is_none()) {
+        "every target".to_string()
+    } else {
+        targets
+            .iter()
+            .map(Targetish::label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    say(
+        cli,
+        &format!("{} is {} on {}", entry.name, order_pos_label(position), where_),
+    );
+}
+
+fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) -> Result<()> {
+    let mut p = load_project(cli)?;
+    let lock = if Lock::exists(&p.dir) {
+        Some(Lock::load(&p.dir)?)
+    } else {
+        None
+    };
+    let on_disk = external_pack_names(&p);
+
+    let labels: Vec<String> = p.softwares.targets.iter().map(Targetish::label).collect();
+    let (targets, scope): (Vec<Target>, Vec<Option<String>>) = if mc.is_some() || loader.is_some() {
+        let t = manifest::pick(&p.softwares.targets, mc, loader)?.clone();
+        let k = Some(order_target_key(mc, loader).unwrap_or_default());
+        (vec![t], vec![k])
+    } else {
+        let options: Vec<String> = labels
+            .iter()
+            .cloned()
+            .chain(std::iter::once("all of them".to_string()))
+            .collect();
+        let chosen: Vec<Target> = loop {
+            let picked = inquire::MultiSelect::new(
+                &format!("{} has {} targets, which ones?", MANIFEST_FILE, labels.len()),
+                options.clone(),
+            )
+            .with_help_message("space ticks a target, enter confirms, right arrow picks everything")
+            .prompt()
+            .map_err(ask_failed)?;
+            if picked.iter().any(|o| o == "all of them") {
+                break p.softwares.targets.clone();
+            }
+            let chosen: Vec<Target> = labels
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| picked.iter().any(|x| x == *l))
+                .filter_map(|(i, _)| p.softwares.targets.get(i).cloned())
+                .collect();
+            if !chosen.is_empty() {
+                break chosen;
+            }
+            detail(
+                cli,
+                "nothing ticked yet, press space on a target then enter, or tick all of them",
+            );
+        };
+        let keys: Vec<Option<String>> = if chosen.len() == p.softwares.targets.len() {
+            vec![None]
+        } else {
+            chosen
+                .iter()
+                .map(|t| Some(format!("{}+{}", t.minecraft, t.loader.kind)))
+                .collect()
+        };
+        (chosen, keys)
+    };
+
+    let scope_label = if scope.iter().any(|k| k.is_none()) {
+        "every target".to_string()
+    } else {
+        targets
+            .iter()
+            .map(Targetish::label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    println!();
+    say(
+        cli,
+        &format!("ordering resource packs for {scope_label}, 1 is the top of the stack"),
+    );
+    for target in &targets {
+        say(cli, &format!("right now, {}", Targetish::label(target)));
+        let entries = order_entries(&p, target, lock.as_ref());
+        if entries.is_empty() {
+            detail(cli, "nothing is active here yet");
+        } else {
+            let rows: Vec<Vec<String>> = entries
+                .iter()
+                .map(|(name, position)| vec![order_pos_label(*position), name.clone()])
+                .collect();
+            println!(
+                "{}",
+                table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+            );
+        }
+    }
+    println!();
+
+    let positions: Vec<String> = ["off".to_string(), "top".to_string(), "bottom".to_string()]
+        .into_iter()
+        .chain((1..=20).map(|n| n.to_string()))
+        .collect();
+
+    loop {
+        let choices = order_choices(&p, &targets, lock.as_ref(), &on_disk);
+        let mut menu: Vec<String> = choices.iter().map(|(label, _)| label.clone()).collect();
+        menu.push(ORDER_CLEAR.to_string());
+        menu.push(ORDER_SAVE.to_string());
+
+        let picked = inquire::Select::new("pick a pack to move", menu.clone())
+            .with_page_size(16)
+            .with_help_message("enter picks it, the number on the left is where it sits now")
+            .prompt()
+            .map_err(ask_failed)?;
+        let Some(i) = menu.iter().position(|o| *o == picked) else {
+            continue;
+        };
+
+        if picked == ORDER_SAVE {
+            break;
+        }
+        if picked == ORDER_CLEAR {
+            let yes = inquire::Confirm::new(&format!("clear every position on {scope_label}?"))
+                .with_default(false)
+                .prompt()
+                .map_err(ask_failed)?;
+            if yes {
+                let entries: Vec<OrderEntry> = order_choices(&p, &targets, lock.as_ref(), &on_disk)
+                    .into_iter()
+                    .map(|(_, e)| e)
+                    .collect();
+                for entry in entries {
+                    set_order_on(&mut p, &entry, &scope, &targets, None, cli);
+                }
+            }
+            continue;
+        }
+
+        let entry = match choices.get(i) {
+            Some((_, e)) => e.clone(),
+            None => continue,
+        };
+        let label = format!("where does {} sit", entry.name);
+        let where_ = inquire::Select::new(&label, positions.clone())
+            .prompt()
+            .map_err(ask_failed)?;
+        let position = parse_position(&where_)?;
+        set_order_on(&mut p, &entry, &scope, &targets, position, cli);
+    }
+
+    p.manifest.write(&p.dir)?;
+    say(cli, &format!("wrote {MANIFEST_FILE}"));
+    for target in &targets {
+        let label = Targetish::label(target);
+        println!();
+        say(cli, &format!("resource pack order for {label}"));
+        let entries = order_entries(&p, target, lock.as_ref());
+        if entries.is_empty() {
+            detail(cli, "nothing is active here");
+            continue;
+        }
+        let rows: Vec<Vec<String>> = entries
+            .iter()
+            .map(|(name, position)| vec![order_pos_label(*position), name.clone()])
+            .collect();
+        println!(
+            "{}",
+            table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+        );
+    }
+    println!();
+    detail(cli, "run `ehmodpack lock` then `ehmodpack build` to see it in the pack");
+    Ok(())
+}
+
+fn order_cmd(
+    cli: &Cli,
+    mc: Option<&str>,
+    loader: Option<LoaderKind>,
+    off: bool,
+    packs: Vec<String>,
+) -> Result<()> {
+    if packs.is_empty() && !off {
+        return order_interactive(cli, mc, loader);
+    }
+    let mut p = load_project(cli)?;
+    let key = order_target_key(mc, loader);
+    let lock = if Lock::exists(&p.dir) {
+        Some(Lock::load(&p.dir)?)
+    } else {
+        None
+    };
+    let targets: Vec<Target> = if key.is_some() {
+        vec![manifest::pick(&p.softwares.targets, mc, loader)?.clone()]
+    } else {
+        p.softwares.targets.clone()
+    };
+
+    let on_disk = external_pack_names(&p);
+
+    for (name, raw) in order_specs(&packs, off)? {
+        let position = parse_position(&raw)?;
+        if position.is_some() && off {
+            bail!("--off does not take a position, just the pack name");
+        }
+        if !off && position.is_none() {
+            bail!("{name:?} needs a position, like {name}=1, or --off to clear it");
+        }
+
+        let mut hit = false;
+        for pkg in p.manifest.packages.iter_mut() {
+            let file = lock.as_ref().and_then(|l| {
+                targets.iter().find_map(|t| {
+                    l.targets
+                        .iter()
+                        .find(|lt| {
+                            lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind
+                        })
+                        .and_then(|lt| {
+                            lt.packages
+                                .iter()
+                                .find(|lp| lp.project.eq_ignore_ascii_case(&pkg.key()))
+                                .map(|lp| lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string())
+                        })
+                })
+            });
+            let known = pkg.key().eq_ignore_ascii_case(&name)
+                || file.as_deref() == Some(name.as_str());
+            if !known || !matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader) {
+                continue;
+            }
+            if position.is_some() && !pkg.is_active() {
+                pkg.active = Some(true);
+                say(cli, &format!("{} is active now", pkg.key()));
+            }
+            set_position(&mut pkg.position, &mut pkg.positions, &key, position);
+            say(
+                cli,
+                &format!(
+                    "{} is {}",
+                    pkg.key(),
+                    match &key {
+                        Some(k) => format!("at {} on {k}", show_position(position)),
+                        None => format!("{} everywhere", show_position(position)),
+                    }
+                ),
+            );
+            hit = true;
+        }
+
+        if !hit {
+            if let Some(pack) = p
+                .manifest
+                .external_packs
+                .iter_mut()
+                .find(|e| e.name.eq_ignore_ascii_case(&name))
+            {
+                if position.is_some() && !pack.is_active() {
+                    pack.active = Some(true);
+                    say(cli, &format!("{} is active now", pack.name));
+                }
+                set_position(&mut pack.position, &mut pack.positions, &key, position);
+                say(
+                    cli,
+                    &format!(
+                        "{} is {}",
+                        pack.name,
+                        match &key {
+                            Some(k) => format!("at {} on {k}", show_position(position)),
+                            None => format!("{} everywhere", show_position(position)),
+                        }
+                    ),
+                );
+                hit = true;
+            }
+        }
+
+        if !hit && !off && on_disk.iter().any(|f| f.eq_ignore_ascii_case(&name)) {
+                let mut pack = manifest::ExternalPack {
+                    name: name.clone(),
+                    active: Some(position.is_some()),
+                    builtin: None,
+                    position: None,
+                    positions: BTreeMap::new(),
+                };
+            set_position(&mut pack.position, &mut pack.positions, &key, position);
+            p.manifest.external_packs.push(pack);
+            say(
+                cli,
+                &format!("added {name} to external_packs, it lives in the overrides folder"),
+            );
+            hit = true;
+        }
+
+        if !hit {
+            let mut known: Vec<String> = p
+                .manifest
+                .packages
+                .iter()
+                .filter(|x| matches!(x.kind, PkgType::Resourcepack | PkgType::Shader))
+                .map(|x| x.key())
+                .collect();
+            known.extend(p.manifest.external_packs.iter().map(|x| x.name.clone()));
+            known.extend(on_disk.iter().cloned());
+            let mut seen = BTreeSet::new();
+            known.retain(|k| seen.insert(k.to_ascii_lowercase()));
+            bail!("{name:?} is not a resource pack here, try one of: {}", known.join(", "));
+        }
+    }
+
+    p.manifest.write(&p.dir)?;
+    if !packs.is_empty() {
+        say(cli, &format!("wrote {MANIFEST_FILE}"));
+    detail(
+        cli,
+        "run ehmodpack lock to refresh the lock and ehmodpack build to apply any changes",
+    );
+    }
+
+    for target in &targets {
+        let label = Targetish::label(target);
+        println!();
+        say(cli, &format!("resource pack order for {label}"));
+        let entries = order_entries(&p, target, lock.as_ref());
+        if entries.is_empty() {
+            detail(cli, "nothing is active here");
+            continue;
+        }
+        let rows: Vec<Vec<String>> = entries
+            .iter()
+            .map(|(name, position)| {
+                vec![show_position(*position), name.clone()]
+            })
+            .collect();
+        println!(
+            "{}",
+            table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+        );
+    }
+    println!();
+    Ok(())
+}
+
+fn show_position(position: Option<RpPosition>) -> String {
+    match position {
+        None => "off".to_string(),
+        Some(RpPosition::At(n)) => n.to_string(),
+        Some(RpPosition::Named(manifest::RpNamed::Bottom)) => "bottom".to_string(),
+        Some(RpPosition::Named(manifest::RpNamed::Top)) => "top".to_string(),
+    }
+}
+
+fn set_position(
+    position: &mut Option<RpPosition>,
+    positions: &mut BTreeMap<String, RpPosition>,
+    key: &Option<String>,
+    value: Option<RpPosition>,
+) {
+    for key in std::slice::from_ref(key) {
+        match (key, value) {
+            (Some(k), Some(v)) => {
+                positions.insert(k.clone(), v);
+            }
+            (Some(k), None) => {
+                positions.remove(k);
+            }
+            (None, Some(v)) => *position = Some(v),
+            (None, None) => *position = None,
+        }
+    }
+}
+
+fn set_positions(
+    position: &mut Option<RpPosition>,
+    positions: &mut BTreeMap<String, RpPosition>,
+    scope: &[Option<String>],
+    value: Option<RpPosition>,
+) {
+    for key in scope {
+        match (key, value) {
+            (Some(k), Some(v)) => {
+                positions.insert(k.clone(), v);
+            }
+            (Some(k), None) => {
+                positions.remove(k);
+            }
+            (None, Some(v)) => *position = Some(v),
+            (None, None) => *position = None,
+        }
+    }
+}
+
+fn external_pack_names(p: &Project) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in [
+        manifest::DEFAULT_OVERRIDES,
+        manifest::DEFAULT_CLIENT_OVERRIDES,
+    ] {
+        let dir = p.dir.join(name).join("resourcepacks");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Some(file) = entry.path().file_name().and_then(|f| f.to_str()) {
+                out.push(file.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn check_schema(cli: &Cli, p: &Project) {
     let lock_version = if Lock::exists(&p.dir) {
         Lock::load(&p.dir).map(|l| l.schema_version).unwrap_or(0)
@@ -5297,6 +6040,132 @@ fn table(cli: &Cli, headers: &[&str], rows: &[Vec<String>], dimmed: &[bool]) -> 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::{
+        order_specs, parse_position, set_positions, looks_like_position, RpPosition,
+    };
+    use crate::manifest::RpNamed;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn a_position_lands_on_every_picked_target() {
+        let mut position = None;
+        let mut positions = BTreeMap::new();
+        let scope = vec![
+            Some("1.21.10+fabric".to_string()),
+            Some("1.21.9+fabric".to_string()),
+        ];
+        set_positions(
+            &mut position,
+            &mut positions,
+            &scope,
+            Some(RpPosition::At(3)),
+        );
+        assert_eq!(
+            positions.get("1.21.10+fabric"),
+            Some(&RpPosition::At(3))
+        );
+        assert_eq!(positions.get("1.21.9+fabric"), Some(&RpPosition::At(3)));
+        assert_eq!(positions.len(), 2);
+        assert!(position.is_none(), "the plain one stays untouched");
+    }
+
+    #[test]
+    fn picking_every_target_writes_the_plain_position() {
+        let mut position = None;
+        let mut positions = BTreeMap::new();
+        set_positions(
+            &mut position,
+            &mut positions,
+            &[None],
+            Some(RpPosition::At(2)),
+        );
+        assert_eq!(position, Some(RpPosition::At(2)));
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn clearing_removes_every_picked_target() {
+        let mut position = Some(RpPosition::At(9));
+        let mut positions = BTreeMap::new();
+        let scope = vec![
+            Some("1.21.10+fabric".to_string()),
+            Some("1.21.9+fabric".to_string()),
+        ];
+        positions.insert("1.21.10+fabric".to_string(), RpPosition::At(3));
+        positions.insert("1.21.9+fabric".to_string(), RpPosition::At(3));
+        set_positions(&mut position, &mut positions, &scope, None);
+        assert!(positions.is_empty(), "{positions:?}");
+        assert_eq!(position, Some(RpPosition::At(9)), "the plain one stays");
+    }
+
+    #[test]
+    fn off_is_a_position_not_a_mistake() {
+        assert_eq!(parse_position("off").unwrap(), None);
+        assert_eq!(parse_position("").unwrap(), None);
+    }
+
+    #[test]
+    fn the_named_and_number_forms_both_read() {
+        assert_eq!(
+            parse_position("top").unwrap(),
+            Some(RpPosition::Named(RpNamed::Top))
+        );
+        assert_eq!(
+            parse_position("bottom").unwrap(),
+            Some(RpPosition::Named(RpNamed::Bottom))
+        );
+        assert_eq!(parse_position("4").unwrap(), Some(RpPosition::At(4)));
+    }
+
+    #[test]
+    fn a_bad_position_is_refused() {
+        assert!(parse_position("0").is_err());
+        assert!(parse_position("up there").is_err());
+    }
+
+    #[test]
+    fn both_argument_forms_pair_up() {
+        let joined = vec!["Ginkgo Font.zip=1".to_string(), "icons=2".to_string()];
+        assert_eq!(
+            order_specs(&joined, false).unwrap(),
+            vec![
+                ("Ginkgo Font.zip".to_string(), "1".to_string()),
+                ("icons".to_string(), "2".to_string())
+            ]
+        );
+        let spaced = vec![
+            "Ginkgo Font.zip".to_string(),
+            "1".to_string(),
+            "icons".to_string(),
+            "2".to_string(),
+        ];
+        assert_eq!(order_specs(&spaced, false).unwrap(), order_specs(&joined, false).unwrap());
+    }
+
+    #[test]
+    fn a_name_with_no_position_is_refused() {
+        assert!(order_specs(&["Ginkgo Font.zip".to_string()], false).is_err());
+    }
+
+    #[test]
+    fn off_takes_a_bare_name() {
+        let bare = vec!["Ginkgo Font.zip".to_string()];
+        assert_eq!(
+            order_specs(&bare, true).unwrap(),
+            vec![("Ginkgo Font.zip".to_string(), String::new())]
+        );
+    }
+
+    #[test]
+    fn a_name_never_reads_as_a_position() {
+        assert!(looks_like_position("1"));
+        assert!(looks_like_position("off"));
+        assert!(!looks_like_position("Ginkgo Font.zip"));
+    }
 }
 
 #[cfg(test)]

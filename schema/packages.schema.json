@@ -54,12 +54,12 @@
       "default": "overrides",
       "description": "folder zipped into overrides/ inside the .mrpack"
     },
-    "clientOverrides": {
+    "client_overrides": {
       "type": "string",
       "default": "client-overrides",
       "description": "folder zipped into client-overrides/"
     },
-    "serverOverrides": {
+    "server_overrides": {
       "type": "string",
       "default": "server-overrides",
       "description": "folder zipped into server-overrides/"
@@ -68,6 +68,13 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/package"
+      }
+    },
+    "external_packs": {
+      "type": "array",
+      "description": "resource packs that are NOT from modrinth",
+      "items": {
+        "$ref": "#/$defs/external_pack"
       }
     }
   },
@@ -88,6 +95,62 @@
         },
         "server": {
           "$ref": "#/$defs/support"
+        }
+      }
+    },
+    "external_pack": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "file names of external resource packs"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "whether it goes into the resource pack list at all"
+        },
+        "builtin": {
+          "type": "boolean",
+          "description": "built in packs from the loader you use",
+          "examples": [
+            true
+          ]
+        },
+        "position": {
+          "oneOf": [
+            {
+              "enum": [
+                "top",
+                "bottom"
+              ]
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ],
+          "description": "where it sits in the resource pack stack, 1 is the top and 2 the one under it"
+        },
+        "positions": {
+          "type": "object",
+          "description": "a position per target, as keys: minecraft+loader, minecraft, default is * and beat position",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "enum": [
+                  "top",
+                  "bottom"
+                ]
+              },
+              {
+                "type": "integer",
+                "minimum": 1
+              }
+            ]
+          }
         }
       }
     },
@@ -172,11 +235,43 @@
           "description": "keep this package pinned at exactly this version, updates and auto-fixes leave it alone"
         },
         "position": {
-          "enum": [
-            "top",
-            "bottom"
+          "oneOf": [
+            {
+              "enum": [
+                "top",
+                "bottom"
+              ]
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
           ],
-          "description": "where an active pack sits in the resource pack stack, defaults to top"
+          "description": "where an active pack sits in the resource pack stack, 1 is the top of the stack and 2 the one under it, defaults to top"
+        },
+        "positions": {
+          "type": "object",
+          "description": "a position per target, as keys: minecraft+loader, minecraft, default is * and beat position",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "enum": [
+                  "top",
+                  "bottom"
+                ]
+              },
+              {
+                "type": "integer",
+                "minimum": 1
+              }
+            ]
+          },
+          "examples": [
+            {
+              "1.21.11+fabric": 1,
+              "1.21.8+fabric": 3
+            }
+          ]
         }
       },
       "anyOf": [

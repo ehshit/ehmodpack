@@ -178,6 +178,36 @@ pub fn check(
                 r.warn(format!("{} has an odd skip key {key:?}", pkg.key()));
             }
         }
+        if pkg.position.is_some() && !pkg.positions.is_empty() {
+            r.warn(format!(
+                "{} has both position and positions, the per target one wins",
+                pkg.key()
+            ));
+        }
+        for key in pkg.positions.keys() {
+            let mc = key.split('+').next().unwrap_or(key);
+            if key != "default" && key != "*" && !mc.starts_with('1') {
+                r.warn(format!("{} has an odd positions key {key:?}", pkg.key()));
+            }
+        }
+    }
+
+    for pack in &manifest.external_packs {
+        if pack.name.trim().is_empty() {
+            r.error("an external pack has no name".to_string());
+        }
+        if pack.is_builtin() && pack.name.contains('/') {
+            r.error(format!(
+                "{} is marked builtin but looks like a file path",
+                pack.name
+            ));
+        }
+        if pack.position.is_some() && !pack.positions.is_empty() {
+            r.warn(format!(
+                "{} has both position and positions, the per target one wins",
+                pack.name
+            ));
+        }
     }
 
     if manifest.packages.is_empty() {

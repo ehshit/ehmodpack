@@ -30,12 +30,24 @@ pub struct LockedPackage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockedExternal {
+    pub name: String,
+    pub active: bool,
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<RpPosition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedTarget {
     pub minecraft: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub java: Option<String>,
     pub loader: LoaderSpec,
     pub packages: Vec<LockedPackage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_packs: Vec<LockedExternal>,
 }
 
 impl LockedTarget {
@@ -44,6 +56,26 @@ impl LockedTarget {
             .iter()
             .filter(|p| p.position.is_some())
             .collect()
+    }
+
+    pub fn active_entries(&self) -> Vec<(String, Option<RpPosition>)> {
+        let mut out: Vec<(String, Option<RpPosition>)> = self
+            .active_packs()
+            .iter()
+            .map(|p| {
+                let bare = p.path.rsplit('/').next().unwrap_or(&p.path);
+                (format!("file/{bare}"), p.position)
+            })
+            .collect();
+        out.extend(self.external_packs.iter().filter(|e| e.active).map(|e| {
+            let entry = if e.builtin {
+                e.name.clone()
+            } else {
+                format!("file/{}", e.name)
+            };
+            (entry, e.position)
+        }));
+        out
     }
 }
 

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::lock::{Lock, LockedTarget};
+use crate::manifest::RpPosition;
 
 pub const INTERNAL_PACK: &str = "fabric-resource-pack-v0";
 
@@ -140,15 +141,7 @@ pub fn build(
     out_dir: &Path,
     sources: &[(String, PathBuf)],
 ) -> Result<PathBuf> {
-    let active: Vec<String> = target
-        .active_packs()
-        .iter()
-        .map(|p| p.path.clone())
-        .collect();
-    let active_files: Vec<String> = active
-        .iter()
-        .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
-        .collect();
+    let active: Vec<(String, Option<RpPosition>)> = target.active_entries();
     fs::create_dir_all(out_dir)
         .with_context(|| format!("could not create {}", out_dir.display()))?;
     let out_path = out_dir.join(format!("{}.mrpack", output_name(lock, target)));
@@ -177,7 +170,7 @@ pub fn build(
                 fs::read(&abs).with_context(|| format!("could not read {}", abs.display()))?;
             if rel == "options.txt" {
                 let text = String::from_utf8_lossy(&bytes).into_owned();
-                bytes = inject_active(&text, &active_files, &local).into_bytes();
+                bytes = inject_ordered(&text, &active, &local).into_bytes();
             } else if let Some(format) = pack_format_for(&target.minecraft) {
                 if rel.ends_with("pack.mcmeta") && is_resource_pack(&rel) {
                     if let Some(fixed) = patch_mcmeta(&bytes, format) {
@@ -199,11 +192,31 @@ pub fn build(
 }
 
 pub fn inject_active(options: &str, active_files: &[String], local: &[String]) -> String {
+    let active: Vec<(String, Option<RpPosition>)> = active_files
+        .iter()
+        .map(|f| (format!("file/{}", f.rsplit('/').next().unwrap_or(f)), None))
+        .collect();
+    inject_ordered(options, &active, local)
+}
+
+pub fn inject_ordered(
+    options: &str,
+    active: &[(String, Option<RpPosition>)],
+    local: &[String],
+) -> String {
     let existing = read_list(options, "resourcePacks")
         .unwrap_or_else(|| vec!["vanilla".to_string()]);
-    let wanted: Vec<String> = active_files
+    let mut ranked: Vec<(String, u32)> = active
         .iter()
-        .map(|f| format!("file/{}", f.rsplit('/').next().unwrap_or(f)))
+        .map(|(entry, position)| {
+            (entry.clone(), position.unwrap_or_default().rank())
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    let wanted: Vec<String> = ranked.iter().map(|(entry, _)| entry.clone()).collect();
+    let bare_wanted: Vec<String> = ranked
+        .iter()
+        .map(|(entry, _)| entry.trim_start_matches("file/").to_string())
         .collect();
 
     let mut packs: Vec<String> = vec!["vanilla".to_string()];
@@ -212,14 +225,16 @@ pub fn inject_active(options: &str, active_files: &[String], local: &[String]) -
             continue;
         }
         let bare = entry.trim_start_matches("file/");
+        if bare_wanted.iter().any(|w| w == bare) {
+            continue;
+        }
         if !local.iter().any(|l| l == bare) {
             continue;
         }
         if !packs.contains(&entry) {
             packs.push(entry);
         }
-    }
-    for entry in wanted {
+    }    for entry in wanted {
         if !packs.contains(&entry) {
             packs.push(entry);
         }

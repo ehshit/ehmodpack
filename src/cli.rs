@@ -174,6 +174,15 @@ pub enum Cmd {
         #[arg(long)]
         no_download: bool,
     },
+    Order {
+        #[arg(long)]
+        mc: Option<String>,
+        #[arg(long, short)]
+        loader: Option<LoaderKind>,
+        #[arg(long)]
+        off: bool,
+        packs: Vec<String>,
+    },
     FixLoader {
         #[arg(long)]
         mc: Option<String>,

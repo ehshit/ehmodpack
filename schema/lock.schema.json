@@ -82,10 +82,28 @@
         "file_size": { "type": "integer" },
         "env": { "$ref": "#/$defs/env" },
         "position": {
-          "enum": ["top", "bottom"],
-          "description": "present means this pack is active in options.txt at testing and build time"
+          "oneOf": [
+            { "enum": ["top", "bottom"] },
+            { "type": "integer", "minimum": 1 }
+          ],
+          "description": "present means this pack is active in options.txt at testing and build time, 1 is the top of the stack"
         },
         "source": { "type": "string" }
+      }
+    },
+    "lockedExternal": {
+      "type": "object",
+      "required": ["name", "active"],
+      "properties": {
+        "name": { "type": "string" },
+        "active": { "type": "boolean" },
+        "builtin": { "type": "boolean" },
+        "position": {
+          "oneOf": [
+            { "enum": ["top", "bottom"] },
+            { "type": "integer", "minimum": 1 }
+          ]
+        }
       }
     },
     "target": {
@@ -98,6 +116,10 @@
         "packages": {
           "type": "array",
           "items": { "$ref": "#/$defs/lockedPackage" }
+        },
+        "external_packs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lockedExternal" }
         }
       }
     }

@@ -103,9 +103,32 @@ impl Default for Env {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub enum RpPosition {
+pub enum RpNamed {
     Top,
     Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RpPosition {
+    Named(RpNamed),
+    At(u32),
+}
+
+impl RpPosition {
+    pub fn rank(self) -> u32 {
+        match self {
+            RpPosition::At(n) => n.max(1),
+            RpPosition::Named(RpNamed::Top) => 1,
+            RpPosition::Named(RpNamed::Bottom) => u32::MAX,
+        }
+    }
+}
+
+impl Default for RpPosition {
+    fn default() -> Self {
+        RpPosition::Named(RpNamed::Top)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +136,16 @@ pub struct LoaderSpec {
     #[serde(rename = "type")]
     pub kind: String,
     pub version: String,
+}
+
+pub fn builtin_packs_for(loader: &str) -> Vec<(&'static str, &'static str)> {
+    let mut out: Vec<(&'static str, &'static str)> = vec![("vanilla", "Vanilla")];
+    if loader.eq_ignore_ascii_case("fabric") {
+        out.push(("fabric", "Fabric Mods"));
+    } else if loader.eq_ignore_ascii_case("neoforge") || loader.eq_ignore_ascii_case("forge") {
+        out.push(("mod_resources", "Mod Resources"));
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +254,8 @@ pub struct Package {
     pub active: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<RpPosition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub positions: BTreeMap<String, RpPosition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -306,6 +341,60 @@ impl Package {
     pub fn is_locked(&self) -> bool {
         self.lock.unwrap_or(false)
     }
+
+    pub fn position_for(&self, minecraft: &str, loader: &str) -> Option<RpPosition> {
+        self.version_keys(minecraft, loader)
+            .iter()
+            .find_map(|key| self.positions.get(key).copied())
+            .or(self.position)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalPack {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<RpPosition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub positions: BTreeMap<String, RpPosition>,
+}
+
+impl ExternalPack {
+    pub fn is_active(&self) -> bool {
+        self.active.unwrap_or(false)
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        self.builtin.unwrap_or(false)
+    }
+
+    pub fn entry(&self) -> String {
+        if self.is_builtin() {
+            self.name.clone()
+        } else {
+            format!("file/{}", self.name)
+        }
+    }
+
+    pub fn version_keys(&self, minecraft: &str, loader: &str) -> Vec<String> {
+        vec![
+            format!("{minecraft}+{loader}"),
+            minecraft.to_string(),
+            "default".to_string(),
+            "*".to_string(),
+        ]
+    }
+
+    pub fn position_for(&self, minecraft: &str, loader: &str) -> Option<RpPosition> {
+        self.version_keys(minecraft, loader)
+            .iter()
+            .find_map(|key| self.positions.get(key).copied())
+            .or(self.position)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,6 +429,8 @@ pub struct Manifest {
     pub server_overrides: String,
     #[serde(default)]
     pub packages: Vec<Package>,
+    #[serde(rename = "external_packs", default, skip_serializing_if = "Vec::is_empty")]
+    pub external_packs: Vec<ExternalPack>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -239,6 +239,7 @@ pub async fn new(
                 optional: None,
                 active: None,
                 position: None,
+                positions: BTreeMap::new(),
                 ids: None,
                 lock: None,
             }
@@ -263,6 +264,7 @@ pub async fn new(
         client_overrides: manifest::DEFAULT_CLIENT_OVERRIDES.to_string(),
         server_overrides: manifest::DEFAULT_SERVER_OVERRIDES.to_string(),
         packages,
+        external_packs: Vec::new(),
     };
     let mut softwares = Softwares {
         schema: None,
