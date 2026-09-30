@@ -182,7 +182,6 @@ jobs:
           Summary: $desc
           License: MIT
           URL: https://github.com/ehshit/ehmodpack
-          BuildArch: $rpm
           %description
           Build, lock and publish Minecraft modpacks from ehmodpack itself.
           %install
@@ -196,7 +195,8 @@ jobs:
           - initial package
           EOF
               sed -i 's/^          //' "$top/SPECS/ehmodpack.spec"
-              rpmbuild -bb --define "_topdir $PWD/$top" "$top/SPECS/ehmodpack.spec" >/dev/null
+              rpmbuild -bb --define "_topdir $PWD/$top" --target "$rpm" \
+                "$top/SPECS/ehmodpack.spec" >/dev/null
               find "$top/RPMS" -name '*.rpm' -exec mv {} "out/ehmodpack-${version}-${rpm}.rpm" \;
               rm -rf "$top"
               echo "made rpm for $arch ($rpm)"
