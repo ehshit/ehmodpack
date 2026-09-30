@@ -52,9 +52,10 @@ jobs:
           bin="ehmodpack-${{ matrix.arch }}${{ matrix.ext }}"
           mkdir -p bundle
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/ehmodpack.exe" "bundle/$bin"
+            exe="ehmodpack.exe"
+            cp "target/${{ matrix.target }}/release/ehmodpack.exe" "bundle/$exe"
             powershell -NoProfile -Command \
-              "Compress-Archive -Force -Path 'bundle/$bin' -DestinationPath 'bundle/ehmodpack-${{ matrix.arch }}.zip'"
+              "Compress-Archive -Force -Path 'bundle/$exe' -DestinationPath 'bundle/ehmodpack-${{ matrix.arch }}.zip'"
           else
             cp "target/${{ matrix.target }}/release/ehmodpack" "bundle/$bin"
             tar -czf "bundle/ehmodpack-${{ matrix.arch }}.tar.gz" -C bundle "$bin"
