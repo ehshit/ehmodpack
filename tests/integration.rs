@@ -1045,14 +1045,14 @@ fn write_mrpack(path: &Path) -> anyhow::Result<()> {
           "path": "mods/sodium-fabric-0.6.0.jar",
           "hashes": { "sha1": "aa", "sha512": "bb" },
           "env": { "client": "required", "server": "unsupported" },
-          "downloads": ["https://cdn.modrinth.com/data/AANobbMI/versions/vvv/sodium.jar"],
+          "downloads": ["https://cdn.modrinth.com/data/AANobbMI/versions/AbCdEfGh/sodium.jar"],
           "fileSize": 1234
         },
         {
           "path": "resourcepacks/pack.zip",
           "hashes": { "sha1": "cc", "sha512": "dd" },
           "env": { "client": "optional", "server": "unsupported" },
-          "downloads": ["https://cdn.modrinth.com/data/CCC/versions/v2/pack.zip"],
+          "downloads": ["https://cdn.modrinth.com/data/ZzYyXxWw/versions/QqRrSsTt/pack.zip"],
           "fileSize": 99
         }
       ]
@@ -1095,7 +1095,7 @@ fn importer_derives_kind_from_the_path() -> anyhow::Result<()> {
     assert_eq!(files[0].kind(), PkgType::Mod);
     assert_eq!(files[1].kind(), PkgType::Resourcepack);
     assert_eq!(files[0].project_id, "AANobbMI");
-    assert_eq!(files[0].version_id, "vvv");
+    assert_eq!(files[0].version_id, "AbCdEfGh");
     assert_eq!(files[1].env.client, Support::Optional);
     Ok(())
 }
@@ -1176,7 +1176,7 @@ async fn mock_modrinth() -> MockServer {
                 }]
             },
             {
-                "id": "ver-release",
+                "id": "AbCdEfGh",
                 "project_id": "AANobbMI",
                 "name": "Sodium 0.6.0",
                 "version_number": "0.6.0",
@@ -1434,7 +1434,7 @@ async fn batch_lookups_return_what_was_asked_for() -> anyhow::Result<()> {
         .mount(&server)
         .await;
     let client = Modrinth::new(server.uri())?;
-    let ids = vec!["ver-release".to_string()];
+    let ids = vec!["AbCdEfGh".to_string()];
     let found = client.versions_by_ids(&ids).await?;
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].version_number, "0.6.0");
