@@ -71,6 +71,7 @@ jobs:
         with:
           name: scenarios
           path: render
+          include-hidden-files: true
           if-no-files-found: error
 
   render:
@@ -149,6 +150,7 @@ jobs:
         with:
           name: demo-${{ matrix.tape }}
           path: render/${{ matrix.tape }}/*.gif
+          include-hidden-files: true
           if-no-files-found: error
 
   pull-request:
