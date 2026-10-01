@@ -17,8 +17,8 @@ use crate::minecraft;
 use crate::modmeta;
 use futures_util::StreamExt;
 use crate::modrinth::{
-    AuthFailure, Category, CreateVersion, Disclosure, Environment, Modrinth, Resolved,
-    SearchFilters, SearchHit, Sort, DEFAULT_API,
+    is_modrinth_id, AuthFailure, Category, CreateVersion, Disclosure, Environment, Modrinth,
+    Resolved, SearchFilters, SearchHit, Sort, DEFAULT_API,
 };
 use crate::scaffold::{self, NewPlan};
 use crate::secret;
@@ -2479,7 +2479,23 @@ async fn new_from_mrpack(
     );
     let client = Modrinth::new(api)?;
     let version_ids: Vec<String> = files.iter().map(|f| f.version_id.clone()).collect();
-    let versions = client.versions_by_ids(&version_ids).await?;
+    let mut versions = client.versions_by_ids(&version_ids).await?;
+    let by_number: Vec<&crate::importer::IndexFile> = files
+        .iter()
+        .filter(|f| !crate::modrinth::is_modrinth_id(&f.version_id))
+        .collect();
+    for f in by_number {
+        let Some(project) = client.project(&f.project_id).await.ok() else {
+            continue;
+        };
+        let listed = client.versions(&project, Some(&minecraft), &[]).await?;
+        if let Some(v) = listed
+            .into_iter()
+            .find(|v| v.version_number == f.version_id)
+        {
+            versions.push(v);
+        }
+    }
     let project_ids: Vec<String> = versions.iter().map(|v| v.project_id.clone()).collect();
     let projects = client.projects_by_ids(&project_ids).await?;
     detail(
@@ -2498,8 +2514,13 @@ async fn new_from_mrpack(
             projects.len()
         ),
     );
-    let by_version: BTreeMap<&str, &crate::modrinth::MVersion> =
+    let mut by_version: BTreeMap<&str, &crate::modrinth::MVersion> =
         versions.iter().map(|v| (v.id.as_str(), v)).collect();
+    for v in &versions {
+        if !is_modrinth_id(&v.version_number) && by_version.get(v.id.as_str()).is_none() {
+            by_version.insert(v.version_number.as_str(), v);
+        }
+    }
     let by_project: BTreeMap<&str, &crate::modrinth::Project> =
         projects.iter().map(|p| (p.id.as_str(), p)).collect();
 

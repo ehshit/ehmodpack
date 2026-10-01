@@ -9,7 +9,7 @@ Set FontSize 16
 Set Width 1280
 Set Height 720
 Set Framerate 12
-Set PlaybackSpeed 2
+Set PlaybackSpeed 3
 Set LoopOffset 20%
 Set Margin 15
 Set MarginFill "#657BF2"
@@ -17,25 +17,27 @@ Set Padding 10
 Set BorderRadius 10
 Set WindowBar Colorful
 Set CursorBlink false
-Set TypingSpeed 200ms
-Set WaitTimeout 120s
+Set TypingSpeed 25ms
+Set WaitTimeout 60s
 
-Sleep 3s
-
-Sleep 1s
-Type "ehmodpack verify --keep-going"
 Sleep 2s
+
+Sleep 500ms
+Type "ehmodpack verify --keep-going"
+Sleep 1s
 Enter
 Wait+Screen /[Ff]ix these/
-Sleep 3s
+Sleep 2s
 
 Type "y"
 Enter
 Wait+Screen /wrote ehmodpack.lock.json/
-Sleep 4s
+Sleep 3s
 
+Sleep 500ms
+Hide
+Type "clear"
 Sleep 1s
-Type "cls"
-Sleep 2s
 Enter
-Sleep 5s
+Show
+Sleep 2s

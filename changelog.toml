@@ -2,6 +2,7 @@
 changelogtext = """
 # Fixed:
 - The modrinth token can no longer get you stuck, instead it will delete it if it is invalid
+- `new-from-mrpack` no longer fails with a 400 when a pack pins a file by version number instead of id, it resolves the version now
 
 # Changed:
 - Visting contents of a mod, shader, datapack or resource pack will give you a way to add it to your project right away

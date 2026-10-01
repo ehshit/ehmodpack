@@ -184,6 +184,9 @@ fn first_download(downloads: &[String]) -> Option<(String, String)> {
     if version == "versions" {
         version = parts.next()?.to_string();
     }
+    if !crate::modrinth::is_modrinth_id(&project) {
+        return None;
+    }
     Some((project, version))
 }
 

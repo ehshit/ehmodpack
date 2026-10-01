@@ -1008,10 +1008,15 @@ impl Modrinth {
     }
 
     pub async fn versions_by_ids(&self, ids: &[String]) -> Result<Vec<MVersion>> {
+        let ids: Vec<String> = ids
+            .iter()
+            .filter(|id| is_modrinth_id(id))
+            .cloned()
+            .collect();
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let encoded = serde_json::to_string(ids)?;
+        let encoded = serde_json::to_string(&ids)?;
         self.get(&format!("{}/versions?ids={}", self.base, encode(&encoded)))
             .await
     }
@@ -1387,4 +1392,8 @@ fn encode(value: &str) -> String {
         }
     }
     out
+}
+
+pub fn is_modrinth_id(s: &str) -> bool {
+    s.len() == 8 && s.bytes().all(|b| b.is_ascii_alphanumeric())
 }
