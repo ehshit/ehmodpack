@@ -33,7 +33,7 @@ Sleep 500ms
 Type "ehmodpack new-from-mrpack testmr.mrpack --workflow source --force"
 Sleep 1s
 Enter
-Wait+Screen /Created a modpack for/
+Sleep 12s
 Sleep 3s
 
 Hide
