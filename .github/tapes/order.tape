@@ -18,7 +18,7 @@ Set BorderRadius 10
 Set WindowBar Colorful
 Set CursorBlink false
 Set TypingSpeed 25ms
-Set WaitTimeout 60s
+Set WaitTimeout 300s
 
 Sleep 2s
 
@@ -30,14 +30,14 @@ Sleep 1s
 Sleep 3s
 
 Space
-Sleep 500ms
+Sleep 900ms
 Enter
-Sleep 1s
+Sleep 2s
 
 Down
-Sleep 500ms
+Sleep 600ms
 Enter
-Sleep 1s
+Sleep 2s
 
 Down
 Sleep 500ms
@@ -76,8 +76,6 @@ Sleep 500ms
 Enter
 Sleep 3s
 
-Up
-Sleep 500ms
 Up
 Sleep 500ms
 Enter

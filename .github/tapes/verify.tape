@@ -18,7 +18,7 @@ Set BorderRadius 10
 Set WindowBar Colorful
 Set CursorBlink false
 Set TypingSpeed 25ms
-Set WaitTimeout 60s
+Set WaitTimeout 300s
 
 Sleep 2s
 
@@ -31,8 +31,8 @@ Sleep 2s
 
 Type "y"
 Enter
-Wait+Screen /wrote ehmodpack.lock.json/
-Sleep 3s
+Wait
+Sleep 5s
 
 Sleep 500ms
 Hide
