@@ -32,7 +32,6 @@ permissions:
 
 env:
   SCENARIO_ZIP_URL: ${{ secrets.SCENARIO_ZIP_URL }}
-  MRPACK_URL: https://cdn.modrinth.com/data/1KVo5zza/versions/K0lc692U/Fabulously.Optimized-v13.3.0-mr.1.mrpack
 
 jobs:
   does-nothing:
@@ -59,13 +58,6 @@ jobs:
           mkdir -p render
           unzip -q scenarios.zip -d render
           find render -mindepth 1 -maxdepth 1 -type d | sort
-
-      - name: download Fabulously Optimized into the new-from-mrpack scenario
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL -o render/new-from-mrpack/fabulously.mrpack "$MRPACK_URL"
-          ls -la render/new-from-mrpack
 
       - uses: actions/upload-artifact@v4
         with:

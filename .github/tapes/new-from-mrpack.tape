@@ -17,7 +17,7 @@ Set Padding 10
 Set BorderRadius 10
 Set WindowBar Colorful
 Set CursorBlink false
-Set TypingSpeed 25ms
+Set TypingSpeed 75ms
 Set WaitTimeout 300s
 
 Sleep 2s
@@ -30,7 +30,7 @@ Wait
 Sleep 2s
 
 Sleep 500ms
-Type "ehmodpack new-from-mrpack fabulously.mrpack --workflow source --force"
+Type "ehmodpack new-from-mrpack testmr.mrpack --workflow source --force"
 Sleep 1s
 Enter
 Wait+Screen /Created a modpack for/

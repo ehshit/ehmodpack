@@ -17,7 +17,7 @@ Set Padding 10
 Set BorderRadius 10
 Set WindowBar Colorful
 Set CursorBlink false
-Set TypingSpeed 25ms
+Set TypingSpeed 75ms
 Set WaitTimeout 300s
 
 Sleep 2s
