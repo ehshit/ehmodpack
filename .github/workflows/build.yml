@@ -339,7 +339,7 @@ jobs:
           try:
               with open("changelog.toml", "rb") as f:
                   data = tomllib.load(f)
-              for date in sorted(data, reverse=True):
+              for date in sorted(data, reverse=True)[:1]:
                   for block in data[date]:
                       text = block.get("changelogtext", "").strip()
                       if text:
