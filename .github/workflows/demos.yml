@@ -9,6 +9,22 @@ name: demos
       - master
       - main
   workflow_dispatch:
+    inputs:
+      only:
+        description: which demos to render (blank = all of them)
+        type: choice
+        default: all
+        options:
+          - all
+          - readme
+          - new-from-mrpack
+          - build
+          - order
+          - verify
+      pr:
+        description: open a pull request with the gifs
+        type: boolean
+        default: 'true'
 
 permissions:
   contents: write
@@ -76,6 +92,15 @@ jobs:
           - label: Render Verify
             tape: verify
     steps:
+      - name: skip the ones we were not asked for
+        if: inputs.only != '' && inputs.only != 'all'
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          if [ "$ONLY" != "${{ matrix.tape }}" ]; then
+            echo "inputs.only is '$ONLY', this job is '${{ matrix.tape }}', skipping"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -99,9 +124,9 @@ jobs:
           VHS_VERSION=0.12.1
           curl -sSL -o vhs.tar.gz \
             "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
-          tar -xzf vhs.tar.gz vhs
-          chmod +x vhs
-          sudo mv vhs /usr/local/bin/vhs
+          tar -xzf vhs.tar.gz
+          sudo mv "vhs_${VHS_VERSION}_Linux_x86_64/vhs" /usr/local/bin/vhs
+          sudo chmod +x /usr/local/bin/vhs
           vhs --version
       - name: Install Eh's Modpack
         run: |
@@ -129,6 +154,7 @@ jobs:
   pull-request:
     name: open a pull request
     needs: render
+    if: github.event_name == 'push' || inputs.pr
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
