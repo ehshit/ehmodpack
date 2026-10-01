@@ -15,8 +15,9 @@ permissions:
   pull-requests: write
 
 env:
-  SCENARIO_ZIP_URL: ${{ vars.SCENARIO_ZIP_URL }}
+  SCENARIO_ZIP_URL: ${{ secrets.SCENARIO_ZIP_URL }}
   MRPACK_URL: https://cdn.modrinth.com/data/1KVo5zza/versions/K0lc692U/Fabulously.Optimized-v13.3.0-mr.1.mrpack
+
 jobs:
   does-nothing:
     name: does nothing
@@ -104,7 +105,7 @@ jobs:
           vhs --version
       - name: Install Eh's Modpack
         run: |
-          cargo install --path . --locked
+          cargo install --path . --offline --frozen 2>/dev/null || cargo install --path .
           ehmodpack --version
 
       - name: render the tape in the scenario directory

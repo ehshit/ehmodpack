@@ -45,7 +45,14 @@ jobs:
           target: ${{ matrix.target }}
           package: libdbus-1-dev
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          if ("${{ runner.os }}" -eq "Windows") {
+            chcp 65001 > $null
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            $env:CARGO_TERM_COLOR = "never"
+          }
+          cargo build --release --target ${{ matrix.target }}
       - name: Bundle
         shell: bash
         run: |
