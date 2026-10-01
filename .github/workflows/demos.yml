@@ -114,10 +114,10 @@ jobs:
           chmod +x ttyd
           sudo mv ttyd /usr/local/bin/ttyd
           ttyd --version
-      - name: Install ffmpeg
+      - name: Install ffmpeg & keychain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg libdbus-1-dev pkg-config
           ffmpeg -version
       - name: Install VHS
         run: |
@@ -130,7 +130,7 @@ jobs:
           vhs --version
       - name: Install Eh's Modpack
         run: |
-          cargo install --path . --offline --frozen 2>/dev/null || cargo install --path .
+          cargo install --path .
           ehmodpack --version
 
       - name: render the tape in the scenario directory
