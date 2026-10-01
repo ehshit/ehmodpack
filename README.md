@@ -1,5 +1,7 @@
 # Eh's Modpacks
 
+![](/.github/tapes/readme.gif)
+
 <div align="center">
 
 <a href="https://github.com/ehshit/ehmodpack/releases">

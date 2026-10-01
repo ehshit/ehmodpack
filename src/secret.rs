@@ -87,8 +87,8 @@ fn seal(token: &str, key: &[u8; KEY_LEN]) -> Result<Vec<u8>> {
 
 fn unseal(blob: &[u8], key: &[u8; KEY_LEN]) -> Result<String> {
     let head = MAGIC.len() + SALT_LEN + NONCE_LEN;
-    if blob.len() < head + 16 || &blob[..MAGIC.len()] != MAGIC {
-        bail!("the saved secret is not an ehmodpack secret, delete it and start over");
+    if blob.len() < head + 16 {
+        bail!("the saved secret is truncated, it cannot be read");
     }
     let ct = cipher(key)?
         .decrypt(
@@ -143,6 +143,13 @@ fn prompt(message: &str) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+fn confirm(message: &str) -> Result<bool> {
+    inquire::Confirm::new(message)
+        .with_default(false)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
 fn generated() -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes(32))
@@ -182,6 +189,12 @@ pub fn load() -> Result<Option<String>> {
     let Some(blob) = read_blob()? else {
         return Ok(None);
     };
+    if blob.len() < MAGIC.len() || &blob[..MAGIC.len()] != MAGIC {
+        if confirm("the saved secret is not an eh's modpack secret, do you want to delete it?")? {
+            let _ = clear();
+        }
+        return Ok(None);
+    }
     let key = match cached_key() {
         Some(k) => k,
         None => {

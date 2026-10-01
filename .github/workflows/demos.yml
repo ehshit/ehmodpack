@@ -1,0 +1,160 @@
+name: demos
+
+"on":
+  push:
+    paths:
+      - .github/tapes/**
+      - .github/workflows/demos.yml
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  SCENARIO_ZIP_URL: ${{ vars.SCENARIO_ZIP_URL }}
+  MRPACK_URL: https://cdn.modrinth.com/data/1KVo5zza/versions/K0lc692U/Fabulously.Optimized-v13.3.0-mr.1.mrpack
+jobs:
+  does-nothing:
+    name: does nothing
+    runs-on: ubuntu-latest
+    steps:
+      - name: does nothing
+        run: 'true'
+
+  scenarios:
+    name: get the scenarios
+    needs: does-nothing
+    runs-on: ubuntu-latest
+    steps:
+      - name: download and extract the scenarios zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$SCENARIO_ZIP_URL" ]; then
+            echo "::error::SCENARIO_ZIP_URL is not set, cannot fetch the scenarios"
+            exit 1
+          fi
+          curl -fsSL -o scenarios.zip "$SCENARIO_ZIP_URL"
+          mkdir -p render
+          unzip -q scenarios.zip -d render
+          find render -mindepth 1 -maxdepth 1 -type d | sort
+
+      - name: download Fabulously Optimized into the new-from-mrpack scenario
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o render/new-from-mrpack/fabulously.mrpack "$MRPACK_URL"
+          ls -la render/new-from-mrpack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scenarios
+          path: render
+          if-no-files-found: error
+
+  render:
+    name: ${{ matrix.label }}
+    needs: scenarios
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Render readme
+            tape: readme
+          - label: Render new from modrinth modpack
+            tape: new-from-mrpack
+          - label: Render Build
+            tape: build
+          - label: Render Order
+            tape: order
+          - label: Render Verify
+            tape: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: scenarios
+          path: render
+
+      - name: Install ttyd
+        run: |
+          curl -sSL -o ttyd \
+            "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64"
+          chmod +x ttyd
+          sudo mv ttyd /usr/local/bin/ttyd
+          ttyd --version
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version
+      - name: Install VHS
+        run: |
+          VHS_VERSION=0.12.1
+          curl -sSL -o vhs.tar.gz \
+            "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf vhs.tar.gz vhs
+          chmod +x vhs
+          sudo mv vhs /usr/local/bin/vhs
+          vhs --version
+      - name: Install Eh's Modpack
+        run: |
+          cargo install --path . --locked
+          ehmodpack --version
+
+      - name: render the tape in the scenario directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="render/${{ matrix.tape }}"
+          echo "=============== ${{ matrix.tape }} ==============="
+          ls -la "$dir"
+          cp ".github/tapes/${{ matrix.tape }}.tape" "$dir/"
+          cd "$dir"
+          vhs "${{ matrix.tape }}.tape"
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-${{ matrix.tape }}
+          path: render/${{ matrix.tape }}/*.gif
+          if-no-files-found: error
+
+  pull-request:
+    name: open a pull request
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: .github/tapes
+          pattern: demo-*
+          merge-multiple: true
+      - name: list what we got
+        run: ls -la .github/tapes
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: demos
+          delete-branch: true
+          commit-message: 'docs: re-render demos'
+          title: 're-render demos'
+          body: |
+            The `demos` workflow rendered every tape in `.github/tapes/` again.
+
+            | demo | gif |
+            | --- | --- |
+            | readme | ![readme](.github/tapes/readme.gif) |
+            | new from modrinth modpack | ![new-from-mrpack](.github/tapes/new-from-mrpack.gif) |
+            | build | ![build](.github/tapes/build.gif) |
+            | order | ![order](.github/tapes/order.gif) |
+            | verify | ![verify](.github/tapes/verify.gif) |
+
+            [Downloads to these demos are found here](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          add-paths: |-
+            .github/tapes/*.gif

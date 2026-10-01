@@ -54,7 +54,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 page: *page,
                 ..SearchFilters::default()
             };
-            if query.is_none() && std::io::stdin().is_terminal() {
+            if std::io::stdin().is_terminal() {
                 interactive_search(&cli, &api, seeded).await
             } else {
                 search_page(&cli, &api, &seeded).await
@@ -68,10 +68,10 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             limit,
         } => browse(&cli, &api, *kind, mc.as_deref(), *loader, *sort, *limit).await,
         Cmd::Info { project } => {
-            info(&cli, &api, project).await?;
+            let project_type = info(&cli, &api, project).await?;
             if std::io::stdin().is_terminal() {
                 println!();
-                install_interactively(&cli, project).await?;
+                after_show(&cli, project, &project_type, true).await?;
             }
             Ok(())
         }
@@ -1099,7 +1099,7 @@ fn truncate(text: &str, max: usize) -> String {
     format!("{cut}…")
 }
 
-async fn info(cli: &Cli, api: &str, project: &str) -> Result<()> {
+async fn info(cli: &Cli, api: &str, project: &str) -> Result<String> {
     let client = Modrinth::new(api)?;
     let p = client.project(project).await?;
     let people = client.people_of(&p).await;
@@ -1157,7 +1157,7 @@ async fn info(cli: &Cli, api: &str, project: &str) -> Result<()> {
     if !p.description.is_empty() {
         println!("\n{}", p.description);
     }
-    Ok(())
+    Ok(p.project_type)
 }
 
 fn pick_targets(p: &Project) -> Result<Vec<Target>> {
@@ -1196,66 +1196,65 @@ fn short_date(stamp: &str) -> String {
     stamp.chars().take(10).collect()
 }
 
-enum Install {
-    Yes,
-    No,
-    Back,
+fn is_addable_kind(project_type: &str) -> bool {
+    matches!(
+        project_type,
+        "mod" | "resourcepack" | "shader" | "datapack"
+    )
 }
 
-fn confirm_install(cli: &Cli, slug: &str, added: &BTreeSet<String>) -> Result<Install> {
-    if load_project(cli).is_err() {
-        println!("add it with: ehmodpack add {slug}");
-        return Ok(Install::Back);
+async fn after_show(cli: &Cli, slug: &str, project_type: &str, from_info: bool) -> Result<()> {
+    let addable = is_addable_kind(project_type);
+    let leave = if from_info { "Exit" } else { "Go back" };
+    if !addable {
+        say(
+            cli,
+            &format!("{slug} is a {project_type}, a pack has nowhere to put that"),
+        );
     }
-    let low = slug.to_ascii_lowercase();
-    if added.contains(&low) {
-        say(cli, &format!("{slug} is already in the pack"));
-        let menu = vec![
-            "add it again".to_string(),
-            "no thanks".to_string(),
-            "back".to_string(),
-        ];
-        let picked = inquire::Select::new(&format!("{slug} is already in the pack"), menu.clone())
+    let add_label = if addable {
+        "Add this".to_string()
+    } else {
+        format!("Add this  (greyed out, it is a {project_type})")
+    };
+    let menu = vec![add_label, leave.to_string()];
+
+    loop {
+        let picked = inquire::Select::new("What do you want to do?", menu.clone())
+            .with_starting_cursor(0)
             .prompt()
             .map_err(ask_failed)?;
-        return Ok(match menu.iter().position(|o| *o == picked) {
-            Some(0) => Install::Yes,
-            Some(1) => Install::No,
-            _ => Install::Back,
-        });
+        let Some(choice) = menu.iter().position(|o| *o == picked) else {
+            continue;
+        };
+        if choice != 0 {
+            return Ok(());
+        }
+        if !addable {
+            say(cli, &format!("{slug} is a {project_type}, so no"));
+            continue;
+        }
+        let Ok(p) = load_project(cli) else {
+            println!("add it with: ehmodpack add {slug}");
+            return Ok(());
+        };
+        if added_slugs(cli).contains(&slug.to_ascii_lowercase()) {
+            say(
+                cli,
+                &format!("{slug} is already in {MANIFEST_FILE}, leaving it be"),
+            );
+            return Ok(());
+        }
+        let targets = pick_targets(&p)?;
+        add_project(cli, &p, slug, None, targets).await?;
+        return Ok(());
     }
-    let menu = vec![
-        format!("install {slug} into the pack"),
-        "no thanks".to_string(),
-        "back".to_string(),
-    ];
-    let picked = inquire::Select::new(&format!("install {slug}?"), menu.clone())
-        .with_starting_cursor(0)
-        .prompt()
-        .map_err(ask_failed)?;
-    Ok(match menu.iter().position(|o| *o == picked) {
-        Some(0) => Install::Yes,
-        Some(1) => Install::No,
-        _ => Install::Back,
-    })
-}
-
-async fn install_interactively(cli: &Cli, slug: &str) -> Result<()> {
-    let added = added_slugs(cli);
-    match confirm_install(cli, slug, &added)? {
-        Install::Yes => {}
-        Install::No => say(cli, "left it out"),
-        Install::Back => return Ok(()),
-    }
-    let p = load_project(cli)?;
-    let targets = pick_targets(&p)?;
-    add_project(cli, &p, slug, None, targets).await
 }
 
 async fn pick_hit(cli: &Cli, api: &str, hit: &SearchHit) -> Result<()> {
     info(cli, api, &hit.slug).await?;
     println!();
-    install_interactively(cli, &hit.slug).await
+    after_show(cli, &hit.slug, &hit.project_type, false).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4812,20 +4811,49 @@ fn resolve_token(cli: &Cli, given: Option<&str>, explained: &mut bool) -> Result
     if secret::has_secret() {
         match secret::load() {
             Ok(Some(t)) => {
-                detail(cli, "logging in to your account");
-                return Ok(t);
+                if !crate::modrinth::token_looks_wrong(&t) {
+                    detail(cli, "logging in to your account");
+                    return Ok(t);
+                }
+                detail(
+                    cli,
+                    "the saved token is not a modrinth token, throwing it away",
+                );
+                forget_secret(cli);
             }
             Ok(None) => {}
-            Err(e) => bail!("{e}"),
+            Err(e) => {
+                detail(cli, &e.to_string());
+                detail(
+                    cli,
+                    "that saved token CAN NOT be recovered, deleting...",
+                );
+                forget_secret(cli);
+            }
         }
     }
-    let token = ask_token_first_time(explained)?.trim().to_string();
-    if token.is_empty() {
-        bail!("this is not a token");
+    loop {
+        let token = ask_token_first_time(explained)?.trim().to_string();
+        if token.is_empty() {
+            bail!("this is not a token");
+        }
+        if crate::modrinth::token_looks_wrong(&token) {
+            detail(
+                cli,
+                "That isn't the right token, modrinth only accepts: mrp_, mra_ or mro_!",
+            );
+            continue;
+        }
+        detail(cli, "saving your token");
+        secret::save(&token)?;
+        return Ok(token);
     }
-    detail(cli, "saving your token");
-    secret::save(&token)?;
-    Ok(token)
+}
+
+fn forget_secret(cli: &Cli) {
+    if let Err(e) = secret::clear() {
+        detail(cli, &format!("could not throw the old token away: {e}"));
+    }
 }
 
 fn resolve_project_id(cli: &Cli, given: Option<&str>, p: &Project) -> Result<String> {

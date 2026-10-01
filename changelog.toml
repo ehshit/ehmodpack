@@ -1,3 +1,12 @@
+[[2026-10-01]]
+changelogtext = """
+# Fixed:
+- The modrinth token can no longer get you stuck, instead it will delete it if it is invalid
+
+# Changed:
+- Visting contents of a mod, shader, datapack or resource pack will give you a way to add it to your project right away
+"""
+
 [[2026-09-28]]
 changelogtext = """
 - Initial Release
