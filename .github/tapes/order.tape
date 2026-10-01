@@ -29,30 +29,60 @@ Enter
 Wait
 Sleep 6s
 
-Down
-Sleep 2s
+Space
+Sleep 1s
 Enter
-Sleep 5s
+Sleep 3s
 
 Down
-Sleep 2s
+Sleep 1s
+Enter
+Sleep 3s
+
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Enter
+Sleep 4s
+
+Down
+Sleep 1s
+Down
+Sleep 1s
+Enter
+Sleep 4s
+
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
+Down
+Sleep 1s
 Enter
 Sleep 5s
 
 Up
-Sleep 2s
+Sleep 1s
+Up
+Sleep 1s
 Enter
-Sleep 5s
+Sleep 4s
 
 Sleep 1s
-Type "ehmodpack order"
-Sleep 2s
-Enter
-Wait
-Sleep 6s
-
-Sleep 1s
-Type "clear"
+Type "cls"
 Sleep 2s
 Enter
 Sleep 5s

@@ -30,7 +30,7 @@ Wait
 Sleep 4s
 
 Sleep 1s
-Type "ehmodpack new-from-mrpack fabulously.mrpack"
+Type "ehmodpack new-from-mrpack fabulously.mrpack --workflow source --force"
 Sleep 2s
 Enter
 Wait+Screen /visit your project/

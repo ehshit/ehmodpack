@@ -26,36 +26,16 @@ Sleep 1s
 Type "ehmodpack verify --keep-going"
 Sleep 2s
 Enter
-Wait
-Sleep 8s
+Wait+Screen /[Ff]ix these/
+Sleep 3s
 
+Type "y"
 Enter
+Wait+Screen /wrote ehmodpack.lock.json/
 Sleep 4s
 
-Down
 Sleep 1s
-Enter
-Sleep 5s
-
-Enter
-Sleep 4s
-
-Down
-Down
-Sleep 1s
-Enter
-Sleep 6s
-
-Enter
-Sleep 4s
-
-Down
-Sleep 1s
-Enter
-Sleep 6s
-
-Sleep 1s
-Type "clear"
+Type "cls"
 Sleep 2s
 Enter
 Sleep 5s

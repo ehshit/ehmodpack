@@ -2,7 +2,7 @@ Output readme.gif
 
 Require ehmodpack
 
-Set Shell powershell
+Set Shell bash
 
 Set Theme "Catppuccin Mocha"
 Set FontSize 16
