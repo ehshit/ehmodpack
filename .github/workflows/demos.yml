@@ -14,8 +14,8 @@ name: demos
           - build
           - order
           - verify
-      commit:
-        description: commit the gifs straight to this branch
+      pr:
+        description: open a pull request with the gifs
         type: boolean
         default: 'true'
 
@@ -138,10 +138,10 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
-  commit:
-    name: commit the gifs
+  pull-request:
+    name: open a pull request
     needs: render
-    if: inputs.commit
+    if: inputs.pr
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -152,15 +152,23 @@ jobs:
           merge-multiple: true
       - name: list what we got
         run: ls -la .github/tapes
-      - name: commit and push
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/tapes/*.gif
-          if git diff --cached --quiet; then
-            echo "the gifs did not change, nothing to commit"
-            exit 0
-          fi
-          git commit -m "docs: re-render demos"
-          git push origin HEAD:refs/heads/${{ github.ref_name }}
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: demos
+          delete-branch: true
+          commit-message: 'docs: re-render demos'
+          title: 're-render demos'
+          body: |
+            The `demos` workflow rendered every tape in `.github/tapes/` again.
+
+            | demo | gif |
+            | --- | --- |
+            | readme | ![readme](.github/tapes/readme.gif) |
+            | new from modrinth modpack | ![new-from-mrpack](.github/tapes/new-from-mrpack.gif) |
+            | build | ![build](.github/tapes/build.gif) |
+            | order | ![order](.github/tapes/order.gif) |
+            | verify | ![verify](.github/tapes/verify.gif) |
+
+            [Downloads to these demos are found here](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          add-paths: |-
+            .github/tapes/*.gif
