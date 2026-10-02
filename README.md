@@ -22,7 +22,7 @@ You can manage the order of the resource packs for your version(s) so it applies
 ## It can create from Modrinth Modpacks
 ![](/.github/tapes/new-from-mrpack.gif)
 
-If you ever feel that you want to move the modpack you created to Eh's Modpacks you can!
+If you ever feel that you want to move the modpack you created to Eh's Modpacks you can! (including the configuration of your modpack with `--include-configs`)
 
 *(However obviously if this is NOT your project make sure to comply with the project licenses and [Modrinth's Content Rules](https://modrinth.com/legal/rules))*
 
