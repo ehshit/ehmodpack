@@ -31,7 +31,7 @@ If you ever feel that you want to move the modpack you created to Eh's Modpacks 
 
 But not also verify, apply the right fixes!!!
 
-When verify is submitted it will look for any:
+When verify is ran it will look for any:
 
 - Usual warning that a mod can break any other mod's version
 - What was found missing from the modpack
