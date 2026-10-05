@@ -5966,7 +5966,7 @@ fn check_schema(cli: &Cli, p: &Project) {
     }
 }
 
-fn set_release(cli: &Cli, api: &str, version: &str) -> Result<()> {
+async fn set_release(cli: &Cli, api: &str, version: &str) -> Result<()> {
     let want = version.trim();
     if want.is_empty() {
         bail!("the version cannot be empty");
@@ -6014,8 +6014,15 @@ fn update_schema(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+fn color_enabled(cli: &Cli) -> bool {
+    if cli.no_color || std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    std::io::stdout().is_terminal() && std::io::stderr().is_terminal()
+}
+
 fn step(cli: &Cli, n: usize, total: usize, text: &str) {
-    if cli.no_color {
+    if !color_enabled(cli) {
         println!("[{n}/{total}] {text}");
     } else {
         println!("{}", format!("[{n}/{total}] {text}").cyan().bold());
@@ -6023,7 +6030,7 @@ fn step(cli: &Cli, n: usize, total: usize, text: &str) {
 }
 
 fn detail(cli: &Cli, text: &str) {
-    if cli.no_color {
+    if !color_enabled(cli) {
         println!("  {text}");
     } else {
         println!("  {}", text.dimmed());
@@ -6031,7 +6038,7 @@ fn detail(cli: &Cli, text: &str) {
 }
 
 fn notice(cli: &Cli, text: &str) {
-    if cli.no_color {
+    if !color_enabled(cli) {
         println!("{text}");
     } else {
         println!("{}", text.yellow());
@@ -6039,7 +6046,7 @@ fn notice(cli: &Cli, text: &str) {
 }
 
 fn say(cli: &Cli, text: &str) {
-    if cli.no_color {
+    if !color_enabled(cli) {
         println!("{text}");
     } else {
         println!("{}", text.bold().green());
@@ -6047,7 +6054,7 @@ fn say(cli: &Cli, text: &str) {
 }
 
 fn grey(cli: &Cli, text: &str) -> String {
-    if cli.no_color {
+    if !color_enabled(cli) {
         text.to_string()
     } else {
         text.bright_black().to_string()
@@ -6055,7 +6062,7 @@ fn grey(cli: &Cli, text: &str) -> String {
 }
 
 fn warn(cli: &Cli, text: &str) {
-    if cli.no_color {
+    if !color_enabled(cli) {
         eprintln!("{text}");
     } else {
         eprintln!("{}", text.yellow());
@@ -6112,7 +6119,7 @@ fn table(cli: &Cli, headers: &[&str], rows: &[Vec<String>], dimmed: &[bool]) -> 
     for (i, row) in rows.iter().enumerate() {
         out.push('\n');
         let line = render_row(row, &widths);
-        if dimmed.get(i).copied().unwrap_or(false) && !cli.no_color {
+        if dimmed.get(i).copied().unwrap_or(false) && color_enabled(cli) {
             out.push_str(&format!("{}", line.dimmed()));
         } else {
             out.push_str(&line);
