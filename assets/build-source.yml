@@ -3,9 +3,9 @@ name: build
 "on":
   push:
     branches:
-      - main
+      - '**'
     tags:
-      - 'v*'
+      - '*'
   workflow_dispatch:
 
 permissions:
@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   build:
+    outputs:
+      version: ${{ steps.ver.outputs.value }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +22,31 @@ jobs:
       - name: Install Eh's Modpack
         run: |
           cargo install --git https://github.com/ehshit/ehmodpack --locked
+      - name: sync the manifest version to the tag
+        id: ver
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+          ehmodpack set-release "$tag"
+          if [ -z "$(git status --porcelain packages.json ehmodpack.lock.json)" ]; then
+            echo "packages.json was already on $tag"
+            exit 0
+          fi
+          echo "syncing packages.json to $tag and pushing it"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages.json ehmodpack.lock.json
+          git commit -m "version: $tag"
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
       - name: check lockfile
         run: ehmodpack lock --check
       - name: build every target
         run: ehmodpack build --locked --all
       - uses: actions/upload-artifact@v4
         with:
-          name: __SLUG__
+          name: modpacks
           path: dist/*.mrpack
           if-no-files-found: error
   publish:
@@ -38,17 +58,20 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: __SLUG__
+          pattern: modpacks
           merge-multiple: true
       - name: read the pack info
         id: meta
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
         run: |
           python3 - > info.json <<'EOF'
-          import json
+          import json, os
           p = json.load(open('packages.json'))
           s = json.load(open('softwares.json'))
           top = (p.get('top') or '')
+          version = os.environ.get('RELEASE_VERSION') or (p.get('version') or '')
           targets = []
           for t in s['targets']:
               mc = t['minecraft']
@@ -62,10 +85,11 @@ jobs:
               l = t['loader']['type']
               if l not in loaders:
                   loaders.append(l)
-          print(json.dumps({'top': top, 'versions': targets, 'loaders': loaders}))
+          print(json.dumps({'top': top, 'version': version, 'versions': targets, 'loaders': loaders}))
           EOF
           info=$(cat info.json)
           echo "top=$(echo "$info" | python3 -c "import json,sys;print(json.load(sys.stdin)['top'])")" >> "$GITHUB_OUTPUT"
+          echo "version=$(echo "$info" | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])")" >> "$GITHUB_OUTPUT"
           echo "versions=$(echo "$info" | python3 -c "import json,sys;print(json.dumps(json.load(sys.stdin)['versions']))")" >> "$GITHUB_OUTPUT"
           echo "loaders=$(echo "$info" | python3 -c "import json,sys;print(json.dumps(json.load(sys.stdin)['loaders']))")" >> "$GITHUB_OUTPUT"
       - name: read the changelog
@@ -98,6 +122,6 @@ jobs:
           loaders: ${{ fromJson(steps.meta.outputs.loaders) }}
           game-versions: ${{ fromJson(steps.meta.outputs.versions) }}
           version-type: release
-          version-name: ${{ steps.meta.outputs.top }}
+          version-name: ${{ steps.meta.outputs.version }}
           changelog-file: .ehmodpack-changelog.md
           files: dist/*.mrpack

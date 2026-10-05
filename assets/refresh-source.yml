@@ -18,6 +18,8 @@ jobs:
       - name: Install Eh's Modpack
         run: |
           cargo install --git https://github.com/ehshit/ehmodpack --locked
+      - name: check lockfile
+        run: ehmodpack lock --check
       - name: bump mod versions
         run: ehmodpack update --update-changelogs
       - name: count the updated mods
@@ -28,7 +30,7 @@ jobs:
         run: ehmodpack build --locked --all
       - uses: actions/upload-artifact@v4
         with:
-          name: __SLUG__
+          name: modpacks
           path: dist/*.mrpack
           if-no-files-found: error
       - uses: peter-evans/create-pull-request@v7

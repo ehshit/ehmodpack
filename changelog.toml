@@ -1,3 +1,17 @@
+[[2026-10-05]]
+changelogtext = """
+# Added:
+- `set-release` sets your project's version in `packages.json` and refreshes the lockfile
+
+# Fixed:
+- Scaffolded workflows only ran for tags starting with `v`, so a tag like `1.0.1` did nothing at all
+- The Modrinth release name came from the `top` field instead of the version, so every release was named after a Minecraft version and the second one collided
+- `refresh` now checks the lockfile before bumping, so a stale one fails right away instead of after the whole update
+- Workflow artifacts are named `modpacks` instead of shipping a raw `__SLUG__` placeholder
+- Scaffolding refuses to write a file that still has an unsubstituted placeholder in it
+- A tag now syncs `packages.json` to its own version, refreshes the lockfile and pushes it, so you cannot tag a version that disagrees with your project
+"""
+
 [[2026-10-01]]
 changelogtext = """
 # Fixed:

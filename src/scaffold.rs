@@ -100,6 +100,19 @@ fn today() -> String {
     )
 }
 
+fn filled(text: &str, rel: &str) -> Result<String> {
+    let bytes = text.as_bytes();
+    for i in 0..bytes.len().saturating_sub(2) {
+        if bytes[i] == b'_' && bytes[i + 1] == b'_' && bytes[i + 2].is_ascii_uppercase() {
+            bail!(
+                "{rel} still has an unsubstituted __THING__ placeholder, \
+                 refusing to scaffold it raw"
+            );
+        }
+    }
+    Ok(text.to_string())
+}
+
 pub fn write_project_files(
     dir: &Path,
     pack: &Manifest,
@@ -124,13 +137,19 @@ pub fn write_project_files(
             today()
         ),
     )?;
-    manifest::write_file(&dir.join("README.md"), &fill(README))?;
+    manifest::write_file(&dir.join("README.md"), &filled(&fill(README), "README.md")?)?;
     let (build, refresh) = match workflow {
         WorkflowKind::Source => (BUILD_SOURCE_WORKFLOW, REFRESH_SOURCE_WORKFLOW),
         WorkflowKind::Binaries => (BUILD_BINARIES_WORKFLOW, REFRESH_BINARIES_WORKFLOW),
     };
-    manifest::write_file(&dir.join(".github/workflows/build.yml"), &fill(build))?;
-    manifest::write_file(&dir.join(".github/workflows/refresh.yml"), &fill(refresh))?;
+    manifest::write_file(
+        &dir.join(".github/workflows/build.yml"),
+        &filled(&fill(build), ".github/workflows/build.yml")?,
+    )?;
+    manifest::write_file(
+        &dir.join(".github/workflows/refresh.yml"),
+        &filled(&fill(refresh), ".github/workflows/refresh.yml")?,
+    )?;
     manifest::write_local_schemas(dir)?;
     Ok(())
 }

@@ -193,6 +193,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         )
         .await,
         Cmd::Validate => validate_cmd(&cli).await,
+        Cmd::SetRelease { version } => set_release(&cli, &api, &version).await,
         Cmd::UpdateSchema => update_schema(&cli),
         Cmd::Test {
             ver,
@@ -1211,11 +1212,12 @@ async fn after_show(cli: &Cli, slug: &str, project_type: &str, from_info: bool) 
             cli,
             &format!("{slug} is a {project_type}, a pack has nowhere to put that"),
         );
+        println!("{}", grey(cli, &format!("this is a {project_type}")));
     }
     let add_label = if addable {
         "Add this".to_string()
     } else {
-        format!("Add this  (greyed out, it is a {project_type})")
+        grey(cli, "Add this")
     };
     let menu = vec![add_label, leave.to_string()];
 
@@ -5964,6 +5966,26 @@ fn check_schema(cli: &Cli, p: &Project) {
     }
 }
 
+fn set_release(cli: &Cli, api: &str, version: &str) -> Result<()> {
+    let want = version.trim();
+    if want.is_empty() {
+        bail!("the version cannot be empty");
+    }
+    let mut p = load_project(cli)?;
+    let current = p.manifest.version.trim().to_string();
+    if current == want {
+        say(cli, &format!("{MANIFEST_FILE} is already on {want}"));
+        return Ok(());
+    }
+    p.manifest.version = want.to_string();
+    p.manifest.stamp();
+    p.manifest.write(&p.dir)?;
+    say(cli, &format!("{MANIFEST_FILE} is now on {want}"));
+    lock_cmd(cli, api, None, None, false).await?;
+    say(cli, &format!("{LOCK_FILE} refreshed"));
+    Ok(())
+}
+
 fn update_schema(cli: &Cli) -> Result<()> {
     let mut p = load_project(cli)?;
     p.manifest.stamp();
@@ -6021,6 +6043,14 @@ fn say(cli: &Cli, text: &str) {
         println!("{text}");
     } else {
         println!("{}", text.bold().green());
+    }
+}
+
+fn grey(cli: &Cli, text: &str) -> String {
+    if cli.no_color {
+        text.to_string()
+    } else {
+        text.bright_black().to_string()
     }
 }
 

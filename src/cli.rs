@@ -216,6 +216,9 @@ pub enum Cmd {
         loader: Option<LoaderKind>,
     },
     Validate,
+    SetRelease {
+        version: String,
+    },
     UpdateSchema,
     Test {
         #[arg(long, short = 'v')]
