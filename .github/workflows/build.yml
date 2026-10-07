@@ -4,6 +4,14 @@ name: Build Binaries
   push:
     branches:
       - master
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - build.rs
+      - src/**
+      - assets/**
+      - schema/**
+      - .github/icon/**
     tags:
       - 'v*'
   workflow_dispatch:
