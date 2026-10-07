@@ -33,6 +33,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Speed the Linux downloads
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -f /etc/apt/apt.conf.d/docker-clean
+          printf 'APT::Keep-Downloaded-Packages "true";\n' | sudo tee /etc/apt/apt.conf.d/00keep-cache >/dev/null
+          printf 'Acquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99retries >/dev/null
+          mkdir -p "$HOME/.cache/apt-archives/partial"
+          printf 'Dir::Cache::archives "%s";\n' "$HOME/.cache/apt-archives" | sudo tee /etc/apt/apt.conf.d/01user-cache >/dev/null
+      - name: cache linux downloads
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-${{ matrix.target }}-v1
+          restore-keys: |
+            apt-${{ matrix.target }}-
       - name: Install Keyring
         if: runner.os == 'Linux'
         run: |
