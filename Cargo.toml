@@ -1,6 +1,6 @@
 [package]
 name = "ehmodpack"
-version = "1.0.2"
+version = "1.0.3"
 authors = ["Eh's modpack <ehmodpack@ehis.gay>"]
 edition = "2024"
 rust-version = "1.85"

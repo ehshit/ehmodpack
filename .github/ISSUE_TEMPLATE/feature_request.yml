@@ -1,0 +1,32 @@
+name: Feature request
+description: an idea to eh's modpack!
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: What is this feature about?
+      description: Pick the closest area, or Other for literally anything else
+      options:
+        - Modrinth (publishing, search, versions)
+        - Resource packs (ordering, sync, positions)
+        - Builds and workflows
+        - Locking and updating
+        - Testing and launching
+        - Java detection and installing
+        - Scaffolding new projects
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: feature
+    attributes:
+      label: Describe the feature
+      description: What should it do, why would it help, and what would you use it for?
+      placeholder: |
+        What: ...
+        Why: ...
+        How I'd use it: ...
+    validations:
+      required: true

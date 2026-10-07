@@ -1,0 +1,44 @@
+name: Bug report
+description: Something isn't working as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: checkboxes
+    id: duplicates
+    attributes:
+      label: Before you open this
+      description: Did you check the issue tab for any duplicates?
+      options:
+        - label: I checked the existing issues and this is not a duplicate
+          required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: What's your OS
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version
+      description: Optional, but very helpful
+      placeholder: Windows 11 23H2
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Describe the issue and how to replicate it
+      description: What happened, and the exact steps to reproduce it
+      placeholder: |
+        Steps:
+        1. Run `ehmodpack ...`
+        2. ...
+        Expected: ...
+        Actual / error output: ...
+    validations:
+      required: true
