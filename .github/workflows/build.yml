@@ -313,19 +313,32 @@ jobs:
           fi
       - name: Write the release notes
         shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python3 - "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.tag }}" > RELEASE_BODY.md <<'EOF'
-          import os, tomllib, subprocess, sys
+          cat > mkrel.py <<'PY'
+          import os
+          import sys
+          import subprocess
+
+          try:
+              import tomllib
+          except ModuleNotFoundError:
+              import tomli as tomllib
+
           version = sys.argv[1]
           tag = sys.argv[2]
           repo = os.environ.get("GITHUB_REPOSITORY", "ehshit/ehmodpack")
           base = "https://github.com/" + repo + "/releases/download/" + tag + "/"
+
           try:
               have = set(os.listdir("downloads"))
           except OSError:
               have = set()
+
           def link(name, label=None):
               return "[" + (label or name) + "](" + base + name + ")"
+
           archives = [
               ("Windows x64", "ehmodpack-windows-x86_64.zip"),
               ("macOS ARM64 (Apple Silicon)", "ehmodpack-macos-aarch64.tar.gz"),
@@ -338,19 +351,30 @@ jobs:
               ("Linux RISC-V 64", "ehmodpack-linux-riscv64gc.tar.gz"),
               ("Linux s390x", "ehmodpack-linux-s390x.tar.gz"),
           ]
+
           rows = ["| System | Download |", "| --- | --- |"]
           for label, name in archives:
               if name in have:
                   rows.append("| " + label + " | " + link(name, "Download") + " |")
+
           deb = {
-              "x64": "amd64", "ARM64": "arm64", "ARMv7": "armhf",
-              "i686": "i386", "PowerPC64 LE": "ppc64el",
-              "RISC-V 64": "riscv64", "s390x": "s390x",
+              "x64": "amd64",
+              "ARM64": "arm64",
+              "ARMv7": "armhf",
+              "i686": "i386",
+              "PowerPC64 LE": "ppc64el",
+              "RISC-V 64": "riscv64",
+              "s390x": "s390x",
           }
           rpm = {
-              "x64": "x86_64", "ARM64": "aarch64", "ARMv7": "armv7hl",
-              "i686": "i686", "PowerPC64 LE": "ppc64le", "s390x": "s390x",
+              "x64": "x86_64",
+              "ARM64": "aarch64",
+              "ARMv7": "armv7hl",
+              "i686": "i686",
+              "PowerPC64 LE": "ppc64le",
+              "s390x": "s390x",
           }
+
           prows = ["| System | deb | rpm |", "| --- | --- | --- |"]
           for label, code in deb.items():
               dname = "ehmodpack-" + version + "-" + code + ".deb"
@@ -359,30 +383,38 @@ jobs:
               dcell = link(dname, "Download") if dname in have else "-"
               rcell = link(rname, "Download") if rname in have else "-"
               prows.append("| " + label + " | " + dcell + " | " + rcell + " |")
-           appimgs = sorted(n for n in have if n.endswith(".AppImage"))
-           extra = []
-           if len(rows) > 2:
-               section = "## Downloads\n\n" + "\n".join(rows)
-               macs = [n for n in have if n.startswith("ehmodpack-macos-") and n.endswith(".tar.gz")]
-               if macs:
-                   def _mtime(n):
-                       try:
-                           return os.path.getmtime(os.path.join("downloads", n))
-                       except OSError:
-                           return 0.0
-                   latest = max(macs, key=_mtime)
-                   binary = latest[:-len(".tar.gz")]
-                   section += (
-                       "\n\n*MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings -> Privacy & Security, "
-                       "or if this is still not opening whitelist it from the quaratine with "
-                       f"`xattr -dr com.apple.quarantine {binary}`*"
-                   )
-               extra.append(section)
-           if len(prows) > 2:
-               extra.append("## Linux packages\n\n" + "\n".join(prows))
-           if appimgs:
-               extra.append("## AppImages\n\n" + "\n".join("- " + link(n) for n in appimgs))
-           out = []
+
+          appimgs = sorted(n for n in have if n.endswith(".AppImage"))
+          extra = []
+          if len(rows) > 2:
+              section = "## Downloads\n\n" + "\n".join(rows)
+              macs = [
+                  n
+                  for n in have
+                  if n.startswith("ehmodpack-macos-") and n.endswith(".tar.gz")
+              ]
+              if macs:
+
+                  def _mtime(n):
+                      try:
+                          return os.path.getmtime(os.path.join("downloads", n))
+                      except OSError:
+                          return 0.0
+
+                  latest = max(macs, key=_mtime)
+                  binary = latest[:-len(".tar.gz")]
+                  section += (
+                      "\n\n*MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings -> Privacy & Security, "
+                      "or if this is still not opening whitelist it from the quaratine with "
+                      f"`xattr -dr com.apple.quarantine {binary}`*"
+                  )
+              extra.append(section)
+          if len(prows) > 2:
+              extra.append("## Linux packages\n\n" + "\n".join(prows))
+          if appimgs:
+              extra.append("## AppImages\n\n" + "\n".join("- " + link(n) for n in appimgs))
+
+          out = []
           entries = []
           try:
               with open("changelog.toml", "rb") as f:
@@ -396,34 +428,47 @@ jobs:
               print("no changelog.toml, skipping the changelog", file=sys.stderr)
           except Exception as e:
               print("could not read changelog.toml: " + str(e), file=sys.stderr)
+
           if entries:
               out.append("\n\n".join(entries))
+
           commits = []
           try:
               prev = subprocess.run(
                   ["git", "describe", "--tags", "--abbrev=0", "HEAD~1"],
-                  capture_output=True, text=True, check=False,
+                  capture_output=True,
+                  text=True,
+                  check=False,
               ).stdout.strip()
               if prev:
                   rng = prev + "..HEAD"
                   raw = subprocess.run(
                       ["git", "log", "--pretty=%h %s", rng, "origin/master"],
-                      capture_output=True, text=True, check=False,
+                      capture_output=True,
+                      text=True,
+                      check=False,
                   ).stdout
                   commits = [l for l in raw.splitlines() if l.strip()]
           except Exception:
               pass
+
           if not commits:
               raw = subprocess.run(
                   ["git", "log", "--pretty=%h %s", "-15", "origin/master"],
-                  capture_output=True, text=True, check=False,
+                  capture_output=True,
+                  text=True,
+                  check=False,
               ).stdout
               commits = [l for l in raw.splitlines() if l.strip()]
-          out.extend(extra)
+
+          if extra:
+              out.extend(extra)
           out.append("## Recent Commits")
           out.extend("- " + c for c in commits)
           print("\n".join(out))
-          EOF
+          PY
+          python3 mkrel.py "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.tag }}" > RELEASE_BODY.md
+          rm -f mkrel.py
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
