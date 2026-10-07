@@ -47,7 +47,7 @@ jobs:
         run: |
           sudo rm -f /etc/apt/apt.conf.d/docker-clean
           printf 'APT::Keep-Downloaded-Packages "true";\n' | sudo tee /etc/apt/apt.conf.d/00keep-cache >/dev/null
-          printf 'Acquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99retries >/dev/null
+          printf 'Acquire::Retries "0";\nAcquire::http::Timeout "15";\nAcquire::https::Timeout "15";\n' | sudo tee /etc/apt/apt.conf.d/99retries >/dev/null
           mkdir -p "$HOME/.cache/apt-archives/partial"
           printf 'Dir::Cache::archives "%s";\n' "$HOME/.cache/apt-archives" | sudo tee /etc/apt/apt.conf.d/01user-cache >/dev/null
       - name: cache linux downloads
@@ -60,15 +60,21 @@ jobs:
             apt-${{ matrix.target }}-
       - name: Install Keyring
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
       - name: install the cross toolchain
         if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-gnu'
+        timeout-minutes: 15
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
           package: libdbus-1-dev
+      - name: hand the apt cache back to the runner
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/apt-archives"
       - name: Build
         shell: pwsh
         run: |
