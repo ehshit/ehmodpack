@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -405,4 +406,93 @@ fn replace_line(text: &str, key: &str, line: &str) -> String {
         }
     }
     out
+}
+
+pub const STAMP_FILE: &str = ".built.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BuildStamp {
+    inputs: String,
+    outputs: BTreeMap<String, String>,
+}
+
+pub fn inputs_digest(lock: &Lock, sources: &[(String, PathBuf)]) -> String {
+    use sha1::Digest;
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update(b"\n");
+    if let Ok(bytes) = serde_json::to_vec(lock) {
+        hasher.update(&bytes);
+    }
+    hasher.update(b"\n");
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for (name, root) in sources {
+        let mut found = Vec::new();
+        if collect(root, root, &mut found).is_err() {
+            continue;
+        }
+        for (rel, abs) in found {
+            entries.push((format!("{name}/{rel}"), sha1_of(&abs).unwrap_or_default()));
+        }
+    }
+    entries.sort();
+    for (key, sum) in entries {
+        hasher.update(key.as_bytes());
+        hasher.update(b"=");
+        hasher.update(sum.as_bytes());
+        hasher.update(b"\n");
+    }
+    hex(&hasher.finalize())
+}
+
+pub fn write_stamp(
+    out_dir: &Path,
+    lock: &Lock,
+    sources: &[(String, PathBuf)],
+    built: &[PathBuf],
+) -> Result<()> {
+    let mut outputs = BTreeMap::new();
+    for path in built {
+        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned())
+            && let Some(sum) = sha1_of(path)
+        {
+            outputs.insert(name, sum);
+        }
+    }
+    let stamp = BuildStamp {
+        inputs: inputs_digest(lock, sources),
+        outputs,
+    };
+    fs::create_dir_all(out_dir)?;
+    let path = out_dir.join(STAMP_FILE);
+    fs::write(&path, serde_json::to_vec_pretty(&stamp)?)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(())
+}
+
+pub fn stamp_fresh(out_dir: &Path, lock: &Lock, sources: &[(String, PathBuf)]) -> bool {
+    let text = match fs::read_to_string(out_dir.join(STAMP_FILE)) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let stamp: BuildStamp = match serde_json::from_str(&text) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if stamp.inputs != inputs_digest(lock, sources) {
+        return false;
+    }
+    for target in &lock.targets {
+        let name = format!("{}.mrpack", output_name(lock, target));
+        let Some(want) = stamp.outputs.get(&name) else {
+            return false;
+        };
+        let Some(got) = sha1_of(&out_dir.join(&name)) else {
+            return false;
+        };
+        if &got != want {
+            return false;
+        }
+    }
+    true
 }

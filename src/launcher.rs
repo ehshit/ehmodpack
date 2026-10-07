@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use futures_util::StreamExt;
 use serde_json::json;
 
 use crate::http::Http;
@@ -64,16 +65,47 @@ where
         .with_context(|| "fabric meta did not give an intermediary jar")?
         .to_string();
 
-    for maven in [
+    let specs: Vec<String> = [
         loader_maven.as_str(),
         intermediary_maven.as_str(),
         sponge_mixin_maven().as_str(),
         mixinextras_maven().as_str(),
-    ] {
-        fetch_maven(http, base, maven, log).await?;
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .chain(asm_mavens())
+    .collect();
+
+    let mut have: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    for maven in &specs {
+        let path = maven_path(maven);
+        if !path.is_empty() && minecraft::library_file(base, &path).is_file() {
+            have.push(maven.clone());
+        } else {
+            missing.push(maven.clone());
+        }
     }
-    for artifact in asm_mavens() {
-        fetch_maven(http, base, &artifact, log).await?;
+    for maven in &have {
+        log(&format!("already have {maven}"));
+    }
+    if !missing.is_empty() {
+        let tasks = missing.iter().cloned().map(|maven| {
+            let http = http.clone();
+            let base = base.to_path_buf();
+            async move {
+                let out = fetch_maven(&http, &base, &maven, &mut |_: &str| {}).await;
+                (maven, out)
+            }
+        });
+        let outcomes: Vec<(String, Result<PathBuf>)> = futures_util::stream::iter(tasks)
+            .buffer_unordered(6)
+            .collect()
+            .await;
+        for (maven, out) in outcomes {
+            out.with_context(|| format!("could not fetch {maven}"))?;
+            log(&format!("got {maven}"));
+        }
     }
 
     let version_id = format!("{mc}-fabric-{loader_version}");

@@ -177,30 +177,20 @@ async fn get_text(url: &str) -> Result<String> {
 
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        .user_agent(crate::modrinth::USER_AGENT)
+        .user_agent(crate::useragent::USER_AGENT)
         .build()
         .context("could not build the http client")?)
 }
 
 pub fn java_for(mc: &str) -> &'static str {
-    let mut parts = mc.split('.');
-    let _major = parts.next();
-    let minor = parts.next().and_then(parse_u32).unwrap_or(0);
-    let patch = parts.next().and_then(parse_u32).unwrap_or(0);
-    if minor >= 21 {
-        return "21";
+    match crate::minecraft::java_for_minecraft(mc) {
+        Some(8) => "8",
+        Some(16) => "16",
+        Some(17) => "17",
+        Some(21) => "21",
+        Some(25) => "25",
+        _ => "8",
     }
-    if minor == 20 && patch >= 5 {
-        return "21";
-    }
-    if minor >= 17 {
-        return "17";
-    }
-    "8"
-}
-
-fn parse_u32(text: &str) -> Option<u32> {
-    text.parse().ok()
 }
 
 #[cfg(test)]
@@ -286,7 +276,9 @@ mod tests {
         assert_eq!(java_for("1.20.6"), "21");
         assert_eq!(java_for("1.20.4"), "17");
         assert_eq!(java_for("1.19.4"), "17");
+        assert_eq!(java_for("1.17.1"), "16");
         assert_eq!(java_for("1.16.5"), "8");
+        assert_eq!(java_for("26.1.2"), "25");
     }
 
     fn parse_maven_versions(xml: &str, mc: &str) -> Vec<String> {

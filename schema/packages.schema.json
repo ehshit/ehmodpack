@@ -151,6 +151,10 @@
               }
             ]
           }
+        },
+        "sha1": {
+          "type": "string",
+          "description": "sha1 of the external pack so it knows about it"
         }
       }
     },

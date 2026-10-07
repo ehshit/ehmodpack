@@ -53,50 +53,8 @@ jobs:
           name: modpacks
           path: dist/*.mrpack
           if-no-files-found: error
-  publish:
-    needs: build
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: modpacks
-          merge-multiple: true
-      - name: read the pack info
-        id: meta
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          python3 - > info.json <<'EOF'
-          import json, os
-          p = json.load(open('packages.json'))
-          s = json.load(open('softwares.json'))
-          top = (p.get('top') or '')
-          version = os.environ.get('RELEASE_VERSION') or (p.get('version') or '')
-          targets = []
-          for t in s['targets']:
-              mc = t['minecraft']
-              if mc not in targets:
-                  targets.append(mc)
-          if top and top in targets:
-              targets.remove(top)
-              targets.insert(0, top)
-          loaders = []
-          for t in s['targets']:
-              l = t['loader']['type']
-              if l not in loaders:
-                  loaders.append(l)
-          print(json.dumps({'top': top, 'version': version, 'versions': targets, 'loaders': loaders}))
-          EOF
-          info=$(cat info.json)
-          echo "top=$(echo "$info" | python3 -c "import json,sys;print(json.load(sys.stdin)['top'])")" >> "$GITHUB_OUTPUT"
-          echo "version=$(echo "$info" | python3 -c "import json,sys;print(json.load(sys.stdin)['version'])")" >> "$GITHUB_OUTPUT"
-          echo "versions=$(echo "$info" | python3 -c "import json,sys;print(json.dumps(json.load(sys.stdin)['versions']))")" >> "$GITHUB_OUTPUT"
-          echo "loaders=$(echo "$info" | python3 -c "import json,sys;print(json.dumps(json.load(sys.stdin)['loaders']))")" >> "$GITHUB_OUTPUT"
       - name: read the changelog
+        if: github.ref_type == 'tag'
         shell: bash
         run: |
           python3 - > .ehmodpack-changelog.md <<'EOF'
@@ -105,7 +63,7 @@ jobs:
           try:
               with open("changelog.toml", "rb") as f:
                   data = tomllib.load(f)
-              for date in sorted(data, reverse=True):
+              for date in sorted(data, reverse=True)[:1]:
                   for block in data[date]:
                       text = block.get("changelogtext", "").strip()
                       if text:
@@ -116,16 +74,17 @@ jobs:
               print("could not read changelog.toml: " + str(e), file=sys.stderr)
           print("\n\n".join(out))
           EOF
-      - name: publish
-        uses: Kir-Antipov/mc-publish@v3.3
-        with:
-          modrinth-id: ${{ vars.MODRINTH_PROJECT }}
-          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-          github-tag: ${{ github.ref_name }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          loaders: ${{ fromJson(steps.meta.outputs.loaders) }}
-          game-versions: ${{ fromJson(steps.meta.outputs.versions) }}
-          version-type: release
-          version-name: ${{ steps.meta.outputs.version }}
-          changelog-file: .ehmodpack-changelog.md
-          files: dist/*.mrpack
+      - name: publish to modrinth
+        if: github.ref_type == 'tag'
+        run: |
+          ehmodpack publish --token "${{ secrets.MODRINTH_TOKEN }}" --project-id "${{ vars.MODRINTH_PROJECT }}"
+      - name: release on github
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${{ github.ref_name }}" dist/*.mrpack \
+            --title "${{ github.ref_name }}" \
+            --notes-file .ehmodpack-changelog.md \
+            || gh release upload "${{ github.ref_name }}" dist/*.mrpack --clobber

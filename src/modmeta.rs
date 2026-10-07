@@ -232,9 +232,27 @@ pub fn satisfied(range: &str, found: &str) -> bool {
         .filter(|c| !c.is_empty())
         .collect();
 
-    if bracketed && parts.len() == 2 {
-        return edge_ok(&found, parts[0], lower_inc, true)
-            && edge_ok(&found, parts[1], upper_inc, false);
+    if bracketed {
+        if let Some(idx) = body.find(',') {
+            let left = body[..idx].trim();
+            let right = body[idx + 1..].trim();
+            let lower_ok = if left.is_empty() {
+                true
+            } else {
+                edge_ok(&found, left, lower_inc, true)
+            };
+            let upper_ok = if right.is_empty() {
+                true
+            } else {
+                edge_ok(&found, right, upper_inc, false)
+            };
+            return lower_ok && upper_ok;
+        }
+        if parts.len() == 1 {
+            let want = parts[0];
+            return edge_ok(&found, want, true, true) && edge_ok(&found, want, true, false);
+        }
+        return true;
     }
 
     parts
@@ -269,6 +287,11 @@ fn edge_ok(found: &str, clause: &str, inclusive: bool, is_lower: bool) -> bool {
     if edge.is_empty() {
         return true;
     }
+    if let Some(want) = wildcard_prefix(edge) {
+        let have = version_tuple(found);
+        let eq = have.len() >= want.len() && have[..want.len()] == want[..];
+        return if op == "!=" { !eq } else { eq };
+    }
     let ord = version_tuple(found).cmp(&version_tuple(edge));
     match op {
         ">=" => ord.is_ge(),
@@ -301,6 +324,11 @@ fn bound_ok(found: &str, op: &str, edge: &str) -> bool {
     if edge.is_empty() {
         return true;
     }
+    if let Some(want) = wildcard_prefix(edge) {
+        let have = version_tuple(found);
+        let eq = have.len() >= want.len() && have[..want.len()] == want[..];
+        return if op == "!=" { !eq } else { eq };
+    }
     let ord = version_tuple(found).cmp(&version_tuple(edge));
     match op {
         ">=" => ord.is_ge(),
@@ -314,16 +342,24 @@ fn bound_ok(found: &str, op: &str, edge: &str) -> bool {
 }
 
 fn version_tuple(text: &str) -> Vec<u64> {
-    clean(text)
-        .split(['.', '_', '-', '+'])
-        .map(|p| {
-            p.chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect::<String>()
-                .parse()
-                .unwrap_or(0)
-        })
+    let text = text.trim().trim_start_matches(['v', 'V']);
+    let core: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    core.split('.')
+        .map(|p| p.parse().unwrap_or(0))
         .collect()
+}
+
+fn wildcard_prefix(edge: &str) -> Option<Vec<u64>> {
+    let last = edge.rsplit('.').next()?.trim().trim_end_matches(['-', '+']);
+    if !matches!(last, "x" | "X" | "*" | "+") {
+        return None;
+    }
+    let cut = edge.len().saturating_sub(last.len());
+    let head = edge[..cut].trim_end_matches(['.', '-', '+']);
+    Some(version_tuple(head))
 }
 
 fn clean(text: &str) -> String {
@@ -718,5 +754,35 @@ mod tests {
         let deps: Vec<String> = meta.depends.iter().map(|d| d.id.clone()).collect();
         assert!(deps.contains(&"neoforge".to_string()), "{deps:?}");
         assert!(deps.contains(&"minecraft".to_string()), "{deps:?}");
+    }
+
+    #[test]
+    fn an_x_wildcard_range_matches_any_patch() {
+        assert!(fits_minecraft("1.21.x", "1.21.11"));
+        assert!(fits_minecraft("1.21.x", "1.21.9"));
+        assert!(fits_minecraft("1.21.*", "1.21.9"));
+        assert!(fits_minecraft("1.21.X", "1.21.9"));
+        assert!(!fits_minecraft("1.21.x", "1.22.0"));
+        assert!(!fits_minecraft("1.21.x", "1.20.6"));
+    }
+
+    #[test]
+    fn a_prerelease_suffix_does_not_inflate_a_version() {
+        assert!(satisfied(">=1.21.9-beta.2 <1.22", "1.21.9"));
+        assert!(satisfied(">=1.21.9-beta.1", "1.21.9"));
+        assert!(satisfied(">=0.3.2", "0.3.2-beta.1"));
+        assert!(!satisfied(">=1.21.9-beta.2 <1.22", "1.20.6"));
+        assert!(satisfied("[21.10.0-beta,)", "21.10.0"));
+    }
+
+    #[test]
+    fn maven_unbounded_brackets_work() {
+        assert!(satisfied("[17,)", "21"));
+        assert!(satisfied("[17,)", "17"));
+        assert!(!satisfied("[17,)", "16"));
+        assert!(satisfied("[1.21.10]", "1.21.10"));
+        assert!(!satisfied("[1.21.10]", "1.21.11"));
+        assert!(satisfied("(,1.21.10]", "1.21.9"));
+        assert!(!satisfied("(,1.21.10]", "1.21.11"));
     }
 }

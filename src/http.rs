@@ -10,7 +10,7 @@ impl Http {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
-                .user_agent(crate::modrinth::USER_AGENT)
+                .user_agent(crate::useragent::USER_AGENT)
                 .build()
                 .context("could not build the http client")?,
         })

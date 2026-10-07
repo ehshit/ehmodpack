@@ -2,12 +2,9 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::useragent::USER_AGENT;
+
 pub const DEFAULT_API: &str = "https://api.modrinth.com/v2";
-pub const USER_AGENT: &str = concat!(
-    "EhModPack v",
-    env!("CARGO_PKG_VERSION"),
-    " (https://github.com/ehshit/ehmodpack)"
-);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Sort {
@@ -249,6 +246,15 @@ pub struct VersionStub {
     pub featured: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AttributableVersion {
+    pub id: String,
+    #[serde(default)]
+    pub version_number: String,
+    #[serde(default)]
+    pub files_missing_attribution: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone)]
 pub enum AuthFailure {
     Expired(String),
@@ -372,6 +378,28 @@ impl Modrinth {
             .context("could not ask modrinth for the versions on that project")?;
         if !res.status().is_success() {
             return Ok(Vec::new());
+        }
+        Ok(res.json().await?)
+    }
+
+    pub async fn project_versions_v3(
+        &self,
+        token: &str,
+        id: &str,
+    ) -> Result<Vec<AttributableVersion>> {
+        let base = self.base.replace("/v2", "/v3");
+        let res = self
+            .authed(token)?
+            .get(format!("{base}/project/{}/version?limit=100", encode(id)))
+            .header("Authorization", token)
+            .send()
+            .await
+            .context("could not ask modrinth for the versions on that project")?;
+        if !res.status().is_success() {
+            anyhow::bail!(
+                "modrinth answered {} for the version list",
+                res.status().as_u16()
+            );
         }
         Ok(res.json().await?)
     }

@@ -4,8 +4,6 @@ name: Build Binaries
   push:
     branches:
       - master
-    paths:
-      - Cargo.toml
     tags:
       - 'v*'
   workflow_dispatch:
@@ -20,6 +18,8 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, target: x86_64-pc-windows-msvc,            arch: windows-x86_64, ext: .exe }
+          - { os: macos-15,       target: aarch64-apple-darwin,              arch: macos-aarch64,  ext: ''   }
+          - { os: macos-15-intel, target: x86_64-apple-darwin,               arch: macos-x86_64,   ext: ''   }
           - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,          arch: linux-x86_64,   ext: ''   }
           - { os: ubuntu-latest,  target: aarch64-unknown-linux-gnu,         arch: linux-aarch64,  ext: ''   }
           - { os: ubuntu-latest,  target: armv7-unknown-linux-gnueabihf,     arch: linux-armv7,    ext: ''   }
@@ -297,6 +297,8 @@ jobs:
               return "[" + (label or name) + "](" + base + name + ")"
           archives = [
               ("Windows x64", "ehmodpack-windows-x86_64.zip"),
+              ("macOS ARM64 (Apple Silicon)", "ehmodpack-macos-aarch64.tar.gz"),
+              ("macOS Intel", "ehmodpack-macos-x86_64.tar.gz"),
               ("Linux x64", "ehmodpack-linux-x86_64.tar.gz"),
               ("Linux ARM64", "ehmodpack-linux-aarch64.tar.gz"),
               ("Linux ARMv7", "ehmodpack-linux-armv7.tar.gz"),
@@ -326,15 +328,30 @@ jobs:
               dcell = link(dname, "Download") if dname in have else "-"
               rcell = link(rname, "Download") if rname in have else "-"
               prows.append("| " + label + " | " + dcell + " | " + rcell + " |")
-          appimgs = sorted(n for n in have if n.endswith(".AppImage"))
-          extra = []
-          if len(rows) > 2:
-              extra.append("## Downloads\n\n" + "\n".join(rows))
-          if len(prows) > 2:
-              extra.append("## Linux packages\n\n" + "\n".join(prows))
-          if appimgs:
-              extra.append("## AppImages\n\n" + "\n".join("- " + link(n) for n in appimgs))
-          out = []
+           appimgs = sorted(n for n in have if n.endswith(".AppImage"))
+           extra = []
+           if len(rows) > 2:
+               section = "## Downloads\n\n" + "\n".join(rows)
+               macs = [n for n in have if n.startswith("ehmodpack-macos-") and n.endswith(".tar.gz")]
+               if macs:
+                   def _mtime(n):
+                       try:
+                           return os.path.getmtime(os.path.join("downloads", n))
+                       except OSError:
+                           return 0.0
+                   latest = max(macs, key=_mtime)
+                   binary = latest[:-len(".tar.gz")]
+                   section += (
+                       "\n\n*MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings -> Privacy & Security, "
+                       "or if this is still not opening whitelist it from the quaratine with "
+                       f"`xattr -dr com.apple.quarantine {binary}`*"
+                   )
+               extra.append(section)
+           if len(prows) > 2:
+               extra.append("## Linux packages\n\n" + "\n".join(prows))
+           if appimgs:
+               extra.append("## AppImages\n\n" + "\n".join("- " + link(n) for n in appimgs))
+           out = []
           entries = []
           try:
               with open("changelog.toml", "rb") as f:

@@ -216,14 +216,15 @@ pub enum Cmd {
         loader: Option<LoaderKind>,
     },
     Validate,
+    Java,
     SetRelease {
         version: String,
     },
     UpdateSchema,
     Test {
-        #[arg(long, short = 'v')]
+        #[arg(long, short)]
         ver: Option<String>,
-        #[arg(long, short = 'l')]
+        #[arg(long, short)]
         loader: Option<LoaderKind>,
         #[arg(long)]
         all: bool,
@@ -235,6 +236,12 @@ pub enum Cmd {
         profile: Option<String>,
         #[arg(long)]
         keep: bool,
+        #[arg(long)]
+        install_java_if_no_there: bool,
+        #[arg(long)]
+        vendor: Option<String>,
+        #[arg(long, value_parser = ["yes", "no"])]
+        java_path: Option<String>,
     },
 }
 

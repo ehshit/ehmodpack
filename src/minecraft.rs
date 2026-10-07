@@ -141,6 +141,11 @@ pub struct Extract {
     pub exclude: Vec<String>,
 }
 
+pub struct AssetObject {
+    pub hash: String,
+    pub size: u64,
+}
+
 impl Library {
     pub fn group_artifact(&self) -> String {
         let parts: Vec<&str> = self.name.split(':').collect();
@@ -294,6 +299,7 @@ pub async fn install<F>(
     http: &crate::http::Http,
     base: &Path,
     target: &crate::lock::LockedTarget,
+    java_home: Option<PathBuf>,
     mut log: F,
 ) -> Result<Natives>
 where
@@ -314,44 +320,95 @@ where
     let mut classpath: Vec<PathBuf> = Vec::new();
     let mut libraries = 0usize;
 
-    for lib in &version.libraries {
+    enum LibJob {
+        Artifact(Artifact),
+        Native(Artifact, Option<Extract>),
+        Local(PathBuf),
+    }
+    enum LibOut {
+        Artifact(PathBuf),
+        Native(usize),
+    }
+    let mut jobs: Vec<(usize, LibJob)> = Vec::new();
+    let mut notes: Vec<(usize, String)> = Vec::new();
+    for (i, lib) in version.libraries.iter().enumerate() {
         if !lib.allowed(&os_name, &arch) {
             continue;
         }
-        let Some(artifact) = lib
+        if let Some(artifact) = lib
             .downloads
             .as_ref()
             .and_then(|d| d.artifact.as_ref())
-            .cloned()
-        else {
-            if let (Some(classifier), Some(downloads)) = (lib.native_classifier(&os_name), &lib.downloads)
+        {
+            jobs.push((i, LibJob::Artifact(artifact.clone())));
+            continue;
+        }
+        if let (Some(classifier), Some(downloads)) = (lib.native_classifier(&os_name), &lib.downloads)
+        {
+            if let Some(native) = downloads
+                .classifiers
+                .as_ref()
+                .and_then(|c| c.get(classifier))
             {
-                if let Some(native) = downloads
-                    .classifiers
-                    .as_ref()
-                    .and_then(|c| c.get(classifier))
-                {
-                    let out = download_native(http, base, native, &native_dir, &lib.extract).await?;
-                    log(&format!("{} native files", out));
-                }
-                continue;
-            }
-            let path = crate::launcher::maven_path(&lib.group_artifact());
-            if path.is_empty() {
-                continue;
-            }
-            let out = library_file(base, &path);
-            if out.is_file() {
-                classpath.push(out);
-                libraries += 1;
-            } else {
-                log(&format!("missing {}, skipping", lib.name));
+                jobs.push((i, LibJob::Native(native.clone(), lib.extract.clone())));
             }
             continue;
-        };
-        let out = download_library(http, base, &artifact).await?;
-        classpath.push(out);
-        libraries += 1;
+        }
+        let path = crate::launcher::maven_path(&lib.group_artifact());
+        if path.is_empty() {
+            notes.push((i, format!("missing {}, skipping", lib.name)));
+            continue;
+        }
+        let out = library_file(base, &path);
+        if out.is_file() {
+            jobs.push((i, LibJob::Local(out)));
+        } else {
+            notes.push((i, format!("missing {}, skipping", lib.name)));
+        }
+    }
+
+    let outcomes: Vec<(usize, Result<LibOut>)> = futures_util::stream::iter(jobs)
+        .map(|(i, job)| {
+            let http = http.clone();
+            let base = base.to_path_buf();
+            let native_dir = native_dir.clone();
+            async move {
+                let out = match job {
+                    LibJob::Artifact(artifact) => download_library(&http, &base, &artifact)
+                        .await
+                        .map(LibOut::Artifact),
+                    LibJob::Native(artifact, extract) => {
+                        download_native(&http, &base, &artifact, &native_dir, &extract)
+                            .await
+                            .map(LibOut::Native)
+                    }
+                    LibJob::Local(path) => Ok(LibOut::Artifact(path)),
+                };
+                (i, out)
+            }
+        })
+        .buffer_unordered(12)
+        .collect()
+        .await;
+
+    let mut ordered: Vec<Option<(usize, Result<LibOut>)>> =
+        (0..version.libraries.len()).map(|_| None).collect();
+    for (i, out) in outcomes {
+        ordered[i] = Some((i, out));
+    }
+    for (_, out) in ordered.into_iter().flatten() {
+        match out {
+            Ok(LibOut::Artifact(path)) => {
+                classpath.push(path);
+                libraries += 1;
+            }
+            Ok(LibOut::Native(n)) => log(&format!("{n} native files")),
+            Err(e) => return Err(e),
+        }
+    }
+    notes.sort_by_key(|(i, _)| *i);
+    for (_, note) in notes {
+        log(&note);
     }
 
     let game_id = version
@@ -403,46 +460,52 @@ where
         log("fetching the asset index");
         let wanted = asset_index(http, base, index).await?;
         let total = wanted.len();
-        let missing: Vec<(String, PathBuf)> = wanted
+        let missing: Vec<(String, PathBuf, u64)> = wanted
             .values()
-            .map(|hash| {
+            .map(|object| {
                 (
-                    format!("{RESOURCE_PACK}/{}/{hash}", &hash[..2]),
-                    asset_path(base, hash),
+                    format!(
+                        "{RESOURCE_PACK}/{}/{}",
+                        &object.hash[..2], object.hash
+                    ),
+                    asset_path(base, &object.hash),
+                    object.size,
                 )
             })
-            .filter(|(_, path)| !path.is_file())
+            .filter(|(_, path, _)| !path.is_file())
             .collect();
         let already = total - missing.len();
         assets = total;
         if missing.is_empty() {
             log(&format!("all {total} assets are already here"));
         } else {
+            let total_bytes: u64 = missing.iter().map(|(_, _, size)| *size).sum();
             log(&format!(
-                "fetching {} of {total} assets, {already} are already here",
-                missing.len()
+                "fetching {} of {total} assets ({}), {already} are already here",
+                missing.len(),
+                crate::staging::human(total_bytes),
             ));
             let mut bar = crate::progress::Bar::new("fetching assets");
             let chunk_size = 240usize;
-            let mut got = 0u64;
+            let mut done_bytes = 0u64;
             for chunk in missing.chunks(chunk_size) {
-                let jobs = chunk.iter().map(|(url, dest)| {
+                let jobs = chunk.iter().map(|(url, dest, size)| {
                     let client = http.clone();
                     let url = url.clone();
                     let dest = dest.clone();
-                    async move { client.fetch_to(&url, &dest).await }
+                    let size = *size;
+                    async move { client.fetch_to(&url, &dest).await.map(|_| size) }
                 });
                 let results: Vec<Result<u64>> = futures_util::stream::iter(jobs)
                     .buffer_unordered(24)
                     .collect()
                     .await;
                 for r in results {
-                    r?;
-                    got += 1;
+                    done_bytes += r?;
+                    bar.tick(done_bytes, Some(total_bytes));
                 }
-                bar.tick(got, Some(missing.len() as u64));
             }
-            bar.done(got);
+            bar.done(done_bytes);
         }
     }
 
@@ -451,7 +514,11 @@ where
         .as_ref()
         .map(|j| j.major_version)
         .unwrap_or(8);
-    let (java, java_major) = java_of(&java_candidates(), required)?;
+    let (java, java_major) = match java_home {
+        Some(home) => java_at_home(&home)
+            .with_context(|| format!("{} does not contain a working java", home.display()))?,
+        None => java_of(&java_candidates(), required)?,
+    };
 
     let mut vars: BTreeMap<String, String> = BTreeMap::new();
     vars.insert(
@@ -696,40 +763,214 @@ pub fn evaluate(args: &[Argument], ctx: &Ctx) -> Vec<String> {
     out
 }
 
-pub fn java_of(candidates: &[PathBuf], required_major: u32) -> Result<(PathBuf, u32)> {
-    let mut seen = Vec::new();
-    for dir in candidates {
-        let exe = dir.join("bin").join(if current_os() == "windows" {
-            "java.exe"
-        } else {
-            "java"
-        });
-        if exe.is_file() && !seen.contains(&exe) {
-            seen.push(exe.clone());
-            let output = std::process::Command::new(&exe)
-                .arg("-version")
-                .output()
-                .with_context(|| format!("could not run {}", exe.display()))?;
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stderr),
-                String::from_utf8_lossy(&output.stdout)
-            );
-            if let Some(major) = parse_java_major(&text) {
-                if major >= required_major {
-                    return Ok((exe, major));
-                }
+pub struct JavaInstall {
+    pub exe: PathBuf,
+    pub major: u32,
+    pub version: String,
+    pub vendor: String,
+    pub home: Option<PathBuf>,
+}
+
+pub fn java_exe_in(home: &Path) -> Option<PathBuf> {
+    let exe = if current_os() == "windows" { "java.exe" } else { "java" };
+    let nested = home.join("bin").join(exe);
+    if nested.is_file() {
+        return Some(nested);
+    }
+    let bare = home.join(exe);
+    if bare.is_file() {
+        return Some(bare);
+    }
+    if let Ok(entries) = std::fs::read_dir(home) {
+        for entry in entries.flatten() {
+            let nested = entry.path().join("bin").join(exe);
+            if nested.is_file() {
+                return Some(nested);
             }
         }
     }
-    bail!(
-        "no java {required_major} or newer was found, ehmodpack looked in {}",
-        candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
+    None
+}
+
+pub fn java_at_home(home: &Path) -> Option<(PathBuf, u32)> {
+    let exe = java_exe_in(home)?;
+    let java = probe_java(&exe)?;
+    Some((exe, java.major))
+}
+
+fn property<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    for line in text.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix(key)
+            && let Some(v) = rest.strip_prefix(" = ")
+        {
+            return Some(v.trim());
+        }
+    }
+    None
+}
+
+pub fn major_of_version(version: &str) -> Option<u32> {
+    let mut parts = version.split(['.', '_', '-', '+']);
+    let first: u32 = parts.next()?.parse().ok()?;
+    if first == 1 {
+        return parts.next()?.parse().ok();
+    }
+    Some(first)
+}
+
+fn vendor_guess(text: &str) -> String {
+    let t = text.to_ascii_lowercase();
+    for (needle, name) in [
+        ("temurin", "Eclipse Adoptium"),
+        ("adoptium", "Eclipse Adoptium"),
+        ("zulu", "Azul Zulu"),
+        ("corretto", "Amazon Corretto"),
+        ("amazon", "Amazon Corretto"),
+        ("microsoft", "Microsoft Build of OpenJDK"),
+        ("graalvm", "GraalVM"),
+        ("liberica", "BellSoft Liberica"),
+        ("semeru", "IBM Semeru"),
+        ("openj9", "IBM Semeru"),
+        ("sapmachine", "Sapmachine"),
+        ("dragonwell", "Alibaba Dragonwell"),
+        ("red hat", "Red Hat"),
+        ("redhat", "Red Hat"),
+        ("oracle", "Oracle JDK"),
+    ] {
+        if t.contains(needle) {
+            return name.to_string();
+        }
+    }
+    "OpenJDK".to_string()
+}
+
+pub fn probe_java(exe: &Path) -> Option<JavaInstall> {
+    let settings = std::process::Command::new(exe)
+        .args(["-XshowSettings:properties", "-version"])
+        .output()
+        .ok();
+    let mut version: Option<String> = None;
+    let mut vendor: Option<String> = None;
+    let mut home: Option<PathBuf> = None;
+    if let Some(output) = settings {
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        version = property(&text, "java.version").map(|s| s.to_string());
+        vendor = property(&text, "java.vendor").map(|s| s.to_string());
+        home = property(&text, "java.home").map(PathBuf::from);
+    }
+    let mut text = String::new();
+    if version.is_none() {
+        let output = std::process::Command::new(exe).arg("-version").output().ok()?;
+        text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let quoted: Vec<&str> = text.split('"').collect();
+        version = quoted.get(1).map(|s| s.to_string());
+    }
+    let version = version?;
+    let major = major_of_version(&version)?;
+    let vendor = vendor.unwrap_or_else(|| vendor_guess(&text));
+    Some(JavaInstall {
+        exe: exe.to_path_buf(),
+        major,
+        version,
+        vendor,
+        home,
+    })
+}
+
+pub fn all_javas() -> Vec<JavaInstall> {
+    let mut out: Vec<JavaInstall> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for dir in java_candidates() {
+        let Some(exe) = java_exe_in(&dir) else { continue };
+        let key = dir
+            .canonicalize()
+            .unwrap_or_else(|_| dir.clone())
+            .to_string_lossy()
+            .into_owned();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        if let Some(java) = probe_java(&exe) {
+            out.push(java);
+        }
+    }
+    out.sort_by(|a, b| b.major.cmp(&a.major).then(a.version.cmp(&b.version)));
+    out
+}
+
+pub fn java_of(candidates: &[PathBuf], required_major: u32) -> Result<(PathBuf, u32)> {
+    let mut seen = Vec::new();
+    let mut found: Vec<(PathBuf, u32)> = Vec::new();
+    for dir in candidates {
+        let Some(exe) = java_exe_in(dir) else { continue };
+        if seen.contains(&exe) {
+            continue;
+        }
+        seen.push(exe.clone());
+        if let Some(java) = probe_java(&exe) {
+            if java.major >= required_major {
+                return Ok((java.exe, java.major));
+            }
+            found.push((java.exe, java.major));
+        }
+    }
+    let looked = candidates
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if found.is_empty() {
+        bail!("no java was found at all, ehmodpack looked in {looked}");
+    }
+    let have = found
+        .iter()
+        .map(|(p, m)| format!("java {m} at {}", p.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    bail!("no java {required_major} or newer was found (found: {have}), ehmodpack looked in {looked}")
+}
+
+pub fn java_for_minecraft(minecraft: &str) -> Option<u32> {
+    let mut parts = minecraft.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().and_then(|p| p.parse().ok())?;
+    let patch: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    if major == 1 {
+        if minor < 17 {
+            return Some(8);
+        }
+        if minor == 17 {
+            return Some(16);
+        }
+        if minor < 20 {
+            return Some(17);
+        }
+        if minor == 20 && patch <= 4 {
+            return Some(17);
+        }
+        return Some(21);
+    }
+    if major == 26 {
+        return Some(25);
+    }
+    None
+}
+
+pub fn required_java(minecraft: &str, declared: Option<&str>) -> u32 {
+    if let Some(n) = java_for_minecraft(minecraft) {
+        return n;
+    }
+    declared.and_then(|s| s.parse().ok()).unwrap_or(21)
 }
 
 pub fn parse_java_major(text: &str) -> Option<u32> {
@@ -754,6 +995,21 @@ pub fn parse_java_major(text: &str) -> Option<u32> {
     None
 }
 
+fn scan_java_dir(out: &mut Vec<PathBuf>, base: &Path) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let bundle = path.join("Contents").join("Home");
+        if bundle.is_dir() {
+            out.push(bundle);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
 pub fn java_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(home) = std::env::var("JAVA_HOME") {
@@ -765,6 +1021,8 @@ pub fn java_candidates() -> Vec<PathBuf> {
                 if let Some(parent) = dir.parent() {
                     out.push(parent.to_path_buf());
                 }
+            } else {
+                out.push(dir);
             }
         }
     }
@@ -773,11 +1031,29 @@ pub fn java_candidates() -> Vec<PathBuf> {
         "C:/Program Files/Eclipse Adoptium",
         "C:/Program Files/Microsoft",
         "C:/Program Files/Zulu",
+        "C:/Program Files/Amazon Corretto",
+        "C:/Program Files/RedHat",
+        "C:/Program Files/BellSoft",
+        "C:/Program Files/GraalVM",
+        "C:/Program Files/Alibaba",
+        "C:/Program Files/Sapmachine",
+        "C:/Program Files/Semeru",
+        "C:/Program Files (x86)/Java",
+        "/Library/Java/JavaVirtualMachines",
+        "/usr/lib/jvm",
+        "/usr/lib64/jvm",
     ] {
-        if let Ok(entries) = std::fs::read_dir(base) {
-            for entry in entries.flatten() {
-                out.push(entry.path());
-            }
+        scan_java_dir(&mut out, Path::new(base));
+    }
+    if let Some(home) = dirs::home_dir() {
+        for rel in [
+            ".jdks",
+            ".sdkman/candidates/java",
+            ".jabba/jdk",
+            "Library/Java/JavaVirtualMachines",
+            ".ehmodpack/java",
+        ] {
+            scan_java_dir(&mut out, &home.join(rel));
         }
     }
     out
@@ -800,7 +1076,7 @@ pub async fn asset_index(
     http: &crate::http::Http,
     dir: &Path,
     index: &AssetIndexRef,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, AssetObject>> {
     let out = dir.join("assets").join("indexes").join(format!("{}.json", index.id));
     if out.is_file() {
         let text = std::fs::read_to_string(&out)?;
@@ -824,13 +1100,20 @@ pub async fn asset_index(
     Ok(parse_asset_index(&String::from_utf8_lossy(&body)))
 }
 
-pub fn parse_asset_index(text: &str) -> BTreeMap<String, String> {
+pub fn parse_asset_index(text: &str) -> BTreeMap<String, AssetObject> {
     let value: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
     let mut out = BTreeMap::new();
     if let Some(objects) = value.get("objects").and_then(|o| o.as_object()) {
         for (name, entry) in objects {
             if let Some(hash) = entry.get("hash").and_then(|h| h.as_str()) {
-                out.insert(name.clone(), hash.to_string());
+                let size = entry.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                out.insert(
+                    name.clone(),
+                    AssetObject {
+                        hash: hash.to_string(),
+                        size,
+                    },
+                );
             }
         }
     }
@@ -1123,7 +1406,11 @@ mod tests {
     fn asset_index_is_flattened_to_name_hash() {
         let text = r#"{"objects":{"minecraft/sounds/x.ogg":{"hash":"abc123","size":1}}}"#;
         let flat = parse_asset_index(text);
-        assert_eq!(flat.get("minecraft/sounds/x.ogg").map(String::as_str), Some("abc123"));
+        assert_eq!(
+            flat.get("minecraft/sounds/x.ogg").map(|o| o.hash.as_str()),
+            Some("abc123")
+        );
+        assert_eq!(flat.get("minecraft/sounds/x.ogg").map(|o| o.size), Some(1));
     }
 
     #[test]

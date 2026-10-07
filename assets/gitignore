@@ -2,3 +2,4 @@
 /dist
 /.ehmodpack-updates
 /.ehmodpack-changelog.md
+.built.json

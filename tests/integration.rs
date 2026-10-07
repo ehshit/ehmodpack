@@ -388,6 +388,7 @@ fn external(name: &str, active: bool, position: Option<RpPosition>) -> ExternalP
         builtin: None,
         position,
         positions: std::collections::BTreeMap::new(),
+        sha1: None,
     }
 }
 

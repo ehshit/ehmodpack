@@ -361,6 +361,8 @@ pub struct ExternalPack {
     pub position: Option<RpPosition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub positions: BTreeMap<String, RpPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
 }
 
 impl ExternalPack {

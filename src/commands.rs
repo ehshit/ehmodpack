@@ -93,6 +93,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         }
         Cmd::Remove { project } => remove(&cli, project),
         Cmd::Find { query, remove } => find_cmd(&cli, query, *remove),
+        Cmd::Java => java_cmd(&cli),
         Cmd::List { mc, loader } => list(&cli, mc.as_deref(), *loader),
         Cmd::Lock { mc, loader, check } => lock_cmd(&cli, &api, mc.as_deref(), *loader, *check).await,
         Cmd::Build {
@@ -203,6 +204,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             launch,
             profile,
             keep,
+            install_java_if_no_there,
+            vendor,
+            java_path,
         } => {
             test_cmd(
                 &cli,
@@ -214,6 +218,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 launch.as_deref(),
                 profile.as_deref(),
                 *keep,
+                *install_java_if_no_there,
+                vendor.as_deref(),
+                java_path.as_deref(),
             )
             .await
         }
@@ -1929,17 +1936,7 @@ async fn do_lock(
                 java: target.java.clone(),
                 loader: target.loader.clone(),
                 packages,
-                external_packs: p
-                    .manifest
-                    .external_packs
-                    .iter()
-                    .map(|e| crate::lock::LockedExternal {
-                        name: e.name.clone(),
-                        active: e.is_active(),
-                        builtin: e.is_builtin(),
-                        position: e.position_for(&target.minecraft, &target.loader.kind),
-                    })
-                    .collect(),
+                external_packs: Vec::new(),
             },
         );
     }
@@ -1950,6 +1947,37 @@ async fn do_lock(
         );
         p.manifest.write(&p.dir)?;
         say(cli, &format!("wrote {MANIFEST_FILE}"));
+    }
+
+    let (renamed_packs, learned_shas) = reconcile_external_packs(cli, p, &fresh);
+    if renamed_packs > 0 {
+        say(
+            cli,
+            &format!(
+                "{} external pack name{} followed a rename",
+                renamed_packs,
+                if renamed_packs == 1 { "" } else { "s" }
+            ),
+        );
+    }
+    if renamed_packs > 0 || learned_shas > 0 {
+        p.manifest.write(&p.dir)?;
+        say(cli, &format!("wrote {MANIFEST_FILE}"));
+    }
+    for (_, t) in fresh.iter_mut() {
+        let minecraft = t.minecraft.clone();
+        let loader = t.loader.kind.clone();
+        t.external_packs = p
+            .manifest
+            .external_packs
+            .iter()
+            .map(|e| crate::lock::LockedExternal {
+                name: e.name.clone(),
+                active: e.is_active(),
+                builtin: e.is_builtin(),
+                position: e.position_for(&minecraft, &loader),
+            })
+            .collect();
     }
 
     let mut targets: Vec<LockedTarget> = Vec::new();
@@ -2300,6 +2328,16 @@ async fn build_cmd(
     }
     println!();
 
+    if build::stamp_fresh(&out_dir, &lock, &sources) {
+        say(
+            cli,
+            "everything in the output folder is already built for this lock and these sources",
+        );
+        check_schema(cli, &p);
+        return Ok(());
+    }
+    let mut built_paths: Vec<PathBuf> = Vec::new();
+
     let client = Modrinth::new(api)?;
     for target in chosen {
         say(
@@ -2366,6 +2404,7 @@ async fn build_cmd(
             ),
         );
         let path = build::build(&lock, target, &out_dir, &sources)?;
+        built_paths.push(path.clone());
         let _ = staging::wipe(&staged);
         say(cli, &format!("built {}", path.display()));
         println!(
@@ -2383,6 +2422,7 @@ async fn build_cmd(
         }
     }
     check_schema(cli, &p);
+    build::write_stamp(&out_dir, &lock, &sources, &built_paths)?;
     Ok(())
 }
 
@@ -3342,6 +3382,9 @@ async fn test_cmd(
     launch: Option<&str>,
     profile: Option<&str>,
     keep: bool,
+    install_java_if_no_there: bool,
+    vendor: Option<&str>,
+    java_path: Option<&str>,
 ) -> Result<()> {
     let p = load_project(cli)?;
     let lock = if Lock::exists(&p.dir) {
@@ -3369,6 +3412,98 @@ async fn test_cmd(
     let client = Modrinth::new(api)?;
 
     for (index, target) in chosen.iter().enumerate() {
+        let required_java = minecraft::required_java(&target.minecraft, target.java.as_deref());
+        if let Some(declared) = target.java.as_deref().and_then(|s| s.parse::<u32>().ok())
+            && let Some(real) = minecraft::java_for_minecraft(&target.minecraft)
+            && declared != real
+        {
+            detail(
+                cli,
+                &format!(
+                    "softwares.json says java {declared} but {} wants java {real}, using {real}",
+                    target.minecraft
+                ),
+            );
+        }
+        let mut java_home: Option<PathBuf> = None;
+        if minecraft::java_of(&minecraft::java_candidates(), required_java).is_err() {
+            let found = minecraft::all_javas();
+            let wrong = if found.is_empty() {
+                "Java isn't installed!".to_string()
+            } else {
+                let mut majors: Vec<String> = Vec::new();
+                for j in &found {
+                    let m = j.major.to_string();
+                    if !majors.contains(&m) {
+                        majors.push(m);
+                    }
+                }
+                format!(
+                    "Found no java version for {required_java} in the system, only found {}",
+                    majors.join(", ")
+                )
+            };
+            println!();
+            println!("This project requires java {required_java} but {wrong}");
+            println!();
+            let ask = install_java_if_no_there
+                || (crate::progress::interactive()
+                    && inquire::Confirm::new(
+                        "Do you want to install the java version for the project? (installed to your system)",
+                    )
+                    .with_default(true)
+                    .prompt()
+                    .map_err(ask_failed)?);
+            if !ask {
+                bail!(
+                    "java {required_java} is needed to test this pack and nothing was installed"
+                );
+            }
+            let vendor_id = match vendor {
+                Some(v) => crate::java_install::normalise_vendor(v)?,
+                None if install_java_if_no_there => crate::java_install::default_vendor(),
+                None => {
+                    let labels: Vec<String> = crate::java_install::VENDORS
+                        .iter()
+                        .map(|(_, l)| l.to_string())
+                        .collect();
+                    let picked = inquire::Select::new("Select Vendor:", labels)
+                        .prompt()
+                        .map_err(ask_failed)?;
+                    crate::java_install::VENDORS
+                        .iter()
+                        .find(|(_, l)| *l == picked)
+                        .map(|(id, _)| *id)
+                        .unwrap_or_else(crate::java_install::default_vendor)
+                }
+            };
+            let add_path = match java_path {
+                Some(v) => v == "yes",
+                None => crate::progress::interactive()
+                    && inquire::Confirm::new("add to path's JAVA_HOME?")
+                        .with_default(false)
+                        .prompt()
+                        .map_err(ask_failed)?,
+            };
+            let fetch = crate::http::Http::new()?;
+            let home = crate::java_install::install(
+                &fetch,
+                vendor_id,
+                required_java,
+                |line| detail(cli, line),
+            )
+            .await?;
+            match crate::java_install::set_java_home(&home, add_path) {
+                Ok(true) => detail(cli, "JAVA_HOME set and java added to your PATH"),
+                Ok(false) => detail(cli, "JAVA_HOME set"),
+                Err(e) => warn(
+                    cli,
+                    &format!("java is installed but the environment was not set: {e:#}"),
+                ),
+            }
+            java_home = Some(home);
+        }
+
         let total = 6;
         let dir = staging::fresh_dir(&lock.name, target)?;
         step(
@@ -3461,7 +3596,8 @@ async fn test_cmd(
         );
         let http = crate::http::Http::new()?;
         let base = dir.join(".minecraft-ehmodpack");
-        let natives = minecraft::install(&http, &base, target, |line| detail(cli, line)).await?;
+        let natives = minecraft::install(&http, &base, target, java_home, |line| detail(cli, line))
+            .await?;
         detail(
             cli,
             &format!(
@@ -3708,6 +3844,20 @@ async fn sync_pack_active(
                 if let Err(e) = fetch_and_check(&client, pkg, &out).await {
                     bad.push(format!("{} {file}: {e:#}", pkg.project));
                     continue;
+                }
+                if pkg.kind == PkgType::Resourcepack {
+                    if let Some(format) = build::pack_format_for(&target.minecraft) {
+                        let ok = std::fs::read(&out)
+                            .map(|b| crate::mcmeta::zip_supports(&b, format))
+                            .unwrap_or(false);
+                        if !ok {
+                            bad.push(format!(
+                                "{} has no way to verify this is for {}!",
+                                pkg.project, target.minecraft
+                            ));
+                            continue;
+                        }
+                    }
                 }
                 on_disk.push((file.clone(), out));
                 matched_files.insert(file);
@@ -4150,6 +4300,28 @@ async fn verify_cmd(
                                 target.minecraft
                             ),
                         });
+                    }
+                }
+            }
+            if pkg.kind == PkgType::Resourcepack {
+                if let Some(format) = build::pack_format_for(&target.minecraft) {
+                    if !crate::mcmeta::zip_supports(&body, format) {
+                        let msg = format!(
+                            "{} has no way to verify this is for {}!",
+                            pkg.project, target.minecraft
+                        );
+                        rows.push(vec![
+                            pkg.project.clone(),
+                            pkg.version_number.clone(),
+                            msg.clone(),
+                        ]);
+                        bad.push(msg.clone());
+                        if !keep_going {
+                            steps.finish();
+                            eprintln!("{}", msg.red().bold());
+                            bail!("stopped at the first failure, pass --keep-going to carry on");
+                        }
+                        continue;
                     }
                 }
             }
@@ -4975,15 +5147,29 @@ async fn publish(
 
     step(cli, 2, 5, "building the mrpacks");
     let sources = override_sources(&p);
+    let reused = build::stamp_fresh(out, &lock, &sources);
+    let mut built_paths: Vec<PathBuf> = Vec::new();
+    if reused {
+        detail(
+            cli,
+            "this lock and these sources are already built, reusing the output files",
+        );
+    }
     let groups = group_by_mc(&lock.targets);
     let mut releases: Vec<Release> = Vec::new();
     for (mc_ver, targets) in &groups {
         for t in targets {
-            detail(
-                cli,
-                &format!("building for {}, {}", t.minecraft, t.loader.kind),
-            );
-            let built = build::build(&lock, t, out, &sources)?;
+            let built = if reused {
+                out.join(format!("{}.mrpack", build::output_name(&lock, t)))
+            } else {
+                detail(
+                    cli,
+                    &format!("building for {}, {}", t.minecraft, t.loader.kind),
+                );
+                let path = build::build(&lock, t, out, &sources)?;
+                built_paths.push(path.clone());
+                path
+            };
             let name = built
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
@@ -5005,6 +5191,11 @@ async fn publish(
                 slot.loaders.push(t.loader.kind.clone());
             }
             slot.files.push((built, name));
+        }
+    }
+    if !reused {
+        if let Err(e) = build::write_stamp(out, &lock, &sources, &built_paths) {
+            detail(cli, &format!("could not write the build stamp: {e:#}"));
         }
     }
     if releases.is_empty() {
@@ -5066,6 +5257,19 @@ async fn publish(
         println!("  unfeaturing   {v}");
     }
     println!();
+
+    for pack in &p.manifest.external_packs {
+        if pack.is_builtin() || !pack.is_active() {
+            continue;
+        }
+        warn(
+            cli,
+            &format!(
+                "Otherwise this is a resource pack for the modpack, {} will most likely will be withheld in Modrinth's side!",
+                pack.name
+            ),
+        );
+    }
 
     step(cli, 4, 5, "uploading to modrinth");
     let mut made: Vec<(String, String, bool)> = Vec::new();
@@ -5188,6 +5392,50 @@ async fn publish(
         println!();
         detail(cli, &format!("{unfeatured} old version(s) unfeatured"));
     }
+    if !created_ids.is_empty() {
+        println!();
+        let perms_link = format!(
+            "https://modrinth.com/project/{}/settings/permissions",
+            project_id
+        );
+        match client.project_versions_v3(&token, &project_id).await {
+            Ok(listed) => {
+                let mut withheld: Vec<String> = Vec::new();
+                for id in &created_ids {
+                    match listed.iter().find(|v| &v.id == id) {
+                        Some(v) if !v.files_missing_attribution.is_empty() => withheld.push(
+                            if v.version_number.is_empty() {
+                                v.id.clone()
+                            } else {
+                                v.version_number.clone()
+                            },
+                        ),
+                        None => withheld.push(id.clone()),
+                        _ => {}
+                    }
+                }
+                if withheld.len() == created_ids.len() {
+                    warn(
+                        cli,
+                        &format!(
+                            "All of the version(s) published got withheld by modrinth, you might need to resolve it by going over here: {perms_link}"
+                        ),
+                    );
+                } else if !withheld.is_empty() {
+                    warn(
+                        cli,
+                        &format!(
+                            "{} was withheld when it was released, you might need to resolve it by going over here: {perms_link}",
+                            withheld.join(", ")
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                detail(cli, &format!("could not check whether modrinth withheld anything: {e:#}"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -5233,6 +5481,67 @@ async fn validate_cmd(cli: &Cli) -> Result<()> {
     check_schema(cli, &p);
     Ok(())
 }
+
+fn java_cmd(cli: &Cli) -> Result<()> {
+    println!();
+    let javas = crate::minecraft::all_javas();
+    if javas.is_empty() {
+        say(cli, "no java was found anywhere");
+        detail(cli, "ehmodpack looked at JAVA_HOME, PATH and the usual install folders");
+        return Ok(());
+    }
+    say(
+        cli,
+        &format!(
+            "found {} java install{}",
+            javas.len(),
+            if javas.len() == 1 { "" } else { "s" }
+        ),
+    );
+    println!();
+    let rows: Vec<Vec<String>> = javas
+        .iter()
+        .map(|j| {
+            vec![
+                format!("java {}", j.version),
+                j.vendor.clone(),
+                j.exe.display().to_string(),
+            ]
+        })
+        .collect();
+    let dimmed = vec![false; rows.len()];
+    println!(
+        "{}",
+        table(cli, &["version", "vendor", "path"], &rows, &dimmed)
+    );
+    if let Ok(p) = load_project(cli) {
+        println!();
+        say(cli, "what your targets ask for");
+        for target in &p.softwares.targets {
+            let want = crate::minecraft::required_java(&target.minecraft, target.java.as_deref());
+            match javas.iter().find(|j| j.major >= want) {
+                Some(j) => detail(
+                    cli,
+                    &format!(
+                        "{} needs java {want}, ok with java {} at {}",
+                        target.label(),
+                        j.version,
+                        j.exe.display()
+                    ),
+                ),
+                None => warn(
+                    cli,
+                    &format!(
+                        "{} needs java {want}, nothing found that new",
+                        target.label()
+                    ),
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn order_target_key(mc: Option<&str>, loader: Option<LoaderKind>) -> Option<String> {
     match (mc, loader) {
         (None, None) => None,
@@ -5488,6 +5797,7 @@ fn set_order_on(
     targets: &[Target],
     position: Option<RpPosition>,
     cli: &Cli,
+    shas: &BTreeMap<String, String>,
 ) {
     if !entry.external {
         for pkg in p.manifest.packages.iter_mut() {
@@ -5510,6 +5820,11 @@ fn set_order_on(
                 if position.is_some() {
                     pack.active = Some(true);
                 }
+                if pack.sha1.is_none() && !pack.is_builtin() {
+                    if let Some(h) = shas.get(&entry.name) {
+                        pack.sha1 = Some(h.clone());
+                    }
+                }
                 set_positions(&mut pack.position, &mut pack.positions, scope, position);
             }
             None => {
@@ -5526,6 +5841,11 @@ fn set_order_on(
                     builtin: if builtin { Some(true) } else { None },
                     position: None,
                     positions: BTreeMap::new(),
+                    sha1: if builtin {
+                        None
+                    } else {
+                        shas.get(&entry.name).cloned()
+                    },
                 };
                 set_positions(&mut pack.position, &mut pack.positions, scope, position);
                 p.manifest.external_packs.push(pack);
@@ -5555,6 +5875,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
         None
     };
     let on_disk = external_pack_names(&p);
+    let pack_shas = record_pack_shas(&p);
 
     let labels: Vec<String> = p.softwares.targets.iter().map(Targetish::label).collect();
     let (targets, scope): (Vec<Target>, Vec<Option<String>>) = if mc.is_some() || loader.is_some() {
@@ -5669,7 +5990,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
                     .map(|(_, e)| e)
                     .collect();
                 for entry in entries {
-                    set_order_on(&mut p, &entry, &scope, &targets, None, cli);
+                    set_order_on(&mut p, &entry, &scope, &targets, None, cli, &pack_shas);
                 }
             }
             continue;
@@ -5684,7 +6005,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
             .prompt()
             .map_err(ask_failed)?;
         let position = parse_position(&where_)?;
-        set_order_on(&mut p, &entry, &scope, &targets, position, cli);
+        set_order_on(&mut p, &entry, &scope, &targets, position, cli, &pack_shas);
     }
 
     p.manifest.write(&p.dir)?;
@@ -5736,6 +6057,7 @@ fn order_cmd(
     };
 
     let on_disk = external_pack_names(&p);
+    let pack_shas = record_pack_shas(&p);
 
     for (name, raw) in order_specs(&packs, off)? {
         let position = parse_position(&raw)?;
@@ -5798,6 +6120,11 @@ fn order_cmd(
                     pack.active = Some(true);
                     say(cli, &format!("{} is active now", pack.name));
                 }
+                if pack.sha1.is_none() && !pack.is_builtin() {
+                    if let Some(h) = pack_shas.get(&name) {
+                        pack.sha1 = Some(h.clone());
+                    }
+                }
                 set_position(&mut pack.position, &mut pack.positions, &key, position);
                 say(
                     cli,
@@ -5821,6 +6148,7 @@ fn order_cmd(
                     builtin: None,
                     position: None,
                     positions: BTreeMap::new(),
+                    sha1: pack_shas.get(&name).cloned(),
                 };
             set_position(&mut pack.position, &mut pack.positions, &key, position);
             p.manifest.external_packs.push(pack);
@@ -5948,6 +6276,76 @@ fn external_pack_names(p: &Project) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+fn record_pack_shas(p: &Project) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (name, path) in build::pack_paths_on_disk(&override_sources(p)) {
+        if path.is_file() {
+            if let Some(h) = build::sha1_of(&path) {
+                out.insert(name, h);
+            }
+        }
+    }
+    out
+}
+
+fn reconcile_external_packs(
+    cli: &Cli,
+    p: &mut Project,
+    fresh: &BTreeMap<String, LockedTarget>,
+) -> (usize, usize) {
+    let shas = record_pack_shas(p);
+    let mut modrinth_by_sha: BTreeMap<String, String> = BTreeMap::new();
+    for target in fresh.values() {
+        for pkg in &target.packages {
+            if !matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader)
+                || pkg.hashes.sha1.is_empty()
+            {
+                continue;
+            }
+            let file = pkg.path.rsplit('/').next().unwrap_or(&pkg.path).to_string();
+            modrinth_by_sha
+                .entry(pkg.hashes.sha1.clone())
+                .or_insert_with(|| file);
+        }
+    }
+    let mut renamed = 0usize;
+    let mut learned = 0usize;
+    for pack in p.manifest.external_packs.iter_mut() {
+        if pack.is_builtin() {
+            continue;
+        }
+        if let Some(sha) = shas.get(&pack.name) {
+            if pack.sha1.is_none() {
+                pack.sha1 = Some(sha.clone());
+                learned += 1;
+            }
+            continue;
+        }
+        let Some(sha) = pack.sha1.clone() else {
+            continue;
+        };
+        let same_name = shas
+            .iter()
+            .find(|(_, h)| *h == &sha)
+            .map(|(n, _)| n.clone());
+        let candidate = same_name.or_else(|| modrinth_by_sha.get(&sha).cloned());
+        if let Some(new_name) = candidate {
+            if new_name != pack.name {
+                detail(
+                    cli,
+                    &format!(
+                        "\"{}\" renamed to \"{}\", same pack",
+                        pack.name, new_name
+                    ),
+                );
+                pack.name = new_name;
+                renamed += 1;
+            }
+        }
+    }
+    (renamed, learned)
 }
 
 fn check_schema(cli: &Cli, p: &Project) {

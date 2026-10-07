@@ -1,15 +1,36 @@
-[[2026-10-05]]
+[[2026-10-07]]
 changelogtext = """
 # Added:
+- Java detection was upgraded, so ehmodpack now finds every java on your system, installs missing, and uses the right one
 - `set-release` sets your project's version in `packages.json` and refreshes the lockfile
+- Progress bars now show the download speed and an ETA while fetching, so you know how long the game setup is going to take
+- The game asset bar counts bytes instead of files, using the sizes from the asset index, so the ETA is based on real throughput
+- Resource packs get their `pack.mcmeta` peeked at during download and `verify` times for the declared support (`pack_format`, `supported_formats`, the `min_format`/`max_format` pair and overlay layers) to check against the target's pack format
+- `publish` warns about every active external pack before uploading, as modrinth will most likely withhold it until its origin is declared on the permissions page
+- After uploading with `publish` it will check every version uploaded thrugh the API and reports the ones modrinth withheld so you can resolve it on the permissions page
+- Builds now leave a `.built.json` stamp in the output folder hashed from the lockfile, including the sources and this version of eh's modpack, so `publish` reuses the stamped mrpacks instead of building everything a second time
+
+# Changed:
+- Game setup fetches in parallel: All of the game assets will now download concurrently instead of one by one
 
 # Fixed:
+- Version ranges understand X-ranges (`1.21.x` / `1.21.*`) the way fabric, forge and neoforge declare them, so `wanted 1.21.x, found 1.21.9` no longer trips
+- Pre-release and build suffixes no longer inflate a version when comparing, so `>=1.21.9-beta.2 <1.22` happily fits `1.21.9`
+- Maven-style unbounded and single bracketed ranges work, like `[17,)` and `[1.21.10]` from neoforge/forge mods.toml
+- Projects' Workflows release notes will only include the latest date only instead of all of them every time
+- A finished download bar now prints a newline, so the following output no longer glues itself onto the bar
+- Externally ordered resource packs remember the sha1 of the file they are, so when the pack file is renamed (`Filename 1.5.3.zip` becoming `1.5.4.zip`) a `lock` spots it is the same pack and renames the order entry
+- Modrinth resource packs are matched the same way through their locked file hash, so their order entry follows the new file name on update
 - Scaffolded workflows only ran for tags starting with `v`, so a tag like `1.0.1` did nothing at all
 - The Modrinth release name came from the `top` field instead of the version, so every release was named after a Minecraft version and the second one collided
 - `refresh` now checks the lockfile before bumping, so a stale one fails right away instead of after the whole update
 - Workflow artifacts are named `modpacks` instead of shipping a raw `__SLUG__` placeholder
 - Scaffolding refuses to write a file that still has an unsubstituted placeholder in it
 - A tag now syncs `packages.json` to its own version, refreshes the lockfile and pushes it, so you cannot tag a version that disagrees with your project
+- The scaffolded publish workflow uploaded every mrpack as a single modrinth version labelled with the whole minecraft range, it now runs `ehmodpack publish` instead for each version of their game loader
+- Progress bars are clipped to the real terminal width instead of a guessed line length, so on a 120 column terminal the asset bar no longer overflows by one character and spawns a fresh duplicated row on every redraw
+- `test` works out the java a Minecraft version actually needs from the version itself instead of believing `softwares.json`, so a target claiming java 17 for 26.1.2 gets called out with `softwares.json says java 17 but 26.1.2 wants java 25, using 25` and runs on 25 anyway
+- Fetching Minecraft versions when creating or adding versions will now add their corresponding java versions accordingly
 """
 
 [[2026-10-01]]
