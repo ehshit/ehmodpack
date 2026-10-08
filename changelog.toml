@@ -3,6 +3,10 @@ changelogtext = """
 # Fixed:
 - Fetching now also trusts the OS certificate store, so behind a proxy that re-signs HTTPS the requests go through instead of dying on `UnknownIssuer`
 - Requests that come back as a webpage instead of the API now say so, and tell if it is an actual block page or just some random HTML in the way
+- Modrinth links will now use `/project/<id>` instead of `/mod/icons` for resource packs that aren't mods
+
+# Changed:
+- Changelogs will have links to old and new versions in modrinth
 """
 
 [[2026-10-07]]

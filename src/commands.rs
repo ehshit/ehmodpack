@@ -2849,7 +2849,8 @@ async fn update_cmd(
     let total: usize = p.manifest.packages.len() * targets.len();
     let mut steps = crate::progress::Steps::new(total);
     let mut n = 0usize;
-    let mut changes: Vec<(String, String, String, String, String)> = Vec::new();
+    let mut changes: Vec<(String, String, String, String, String, String, String, String)> =
+        Vec::new();
     let mut learn: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut bad: Vec<String> = Vec::new();
     let mut skipped: Vec<(String, String, String)> = Vec::new();
@@ -2890,15 +2891,20 @@ async fn update_cmd(
                         t.packages
                             .iter()
                             .find(|lp| lp.project.eq_ignore_ascii_case(&slug))
-                            .map(|lp| lp.version_number.clone())
+                            .map(|lp| (lp.version_number.clone(), lp.version_id.clone()))
                     })
             });
-            let was = locked.or(pinned);
+            let was = locked.as_ref().map(|(v, _)| v.clone()).or(pinned);
+            let old_vid = locked
+                .as_ref()
+                .map(|(_, id)| id.clone())
+                .unwrap_or_default();
 
             let Ok(project) = client.project(&slug).await else {
                 skipped.push((slug.clone(), target.label(), "not on modrinth".to_string()));
                 continue;
             };
+            let pid = project.id.clone();
             let want = if kind == PkgType::Mod {
                 loaders.clone()
             } else {
@@ -2943,6 +2949,7 @@ async fn update_cmd(
             else {
                 continue;
             };
+            let new_vid = version.id.clone();
             let title = project.title.clone();
             let found = match crate::modrinth::resolve_from_project(project, version) {
                 Ok(f) => f,
@@ -2970,6 +2977,9 @@ async fn update_cmd(
                 key.clone(),
                 was.unwrap_or_else(|| "*".to_string()),
                 best,
+                pid,
+                new_vid,
+                old_vid,
             ));
         }
     }
@@ -2985,7 +2995,7 @@ async fn update_cmd(
     } else {
         let rows: Vec<Vec<String>> = changes
             .iter()
-            .map(|(s, _t, k, w, n)| {
+            .map(|(s, _t, k, w, n, _p, _nv, _ov)| {
                 vec![s.clone(), k.clone(), w.clone(), n.clone()]
             })
             .collect();
@@ -3033,7 +3043,7 @@ async fn update_cmd(
         2,
         "writing the new pins and locking",
     );
-    for (slug, _title, key, _was, now) in &changes {
+    for (slug, _title, key, _was, now, _pid, _nv, _ov) in &changes {
         set_pin(&mut p.manifest, slug, key, now, single);
     }
     for (slug, ids) in &learn {
@@ -3069,10 +3079,21 @@ async fn update_cmd(
         let mut lines: Vec<String> = Vec::new();
         lines.push("## Mod Updates".to_string());
         lines.push(String::new());
-        for (slug, title, _key, was, now) in &changes {
-            let old = if was == "*" { "*".to_string() } else { was.clone() };
+        for (_slug, title, _key, was, now, pid, new_vid, old_vid) in &changes {
+            let project_url = format!("https://modrinth.com/project/{pid}");
+            let old_disp = if was == "*" { "*".to_string() } else { was.clone() };
+            let old_link = if old_vid.is_empty() {
+                old_disp
+            } else {
+                format!("[{old_disp}]({project_url}/version/{old_vid})")
+            };
+            let new_link = if new_vid.is_empty() {
+                now.clone()
+            } else {
+                format!("[{now}]({project_url}/version/{new_vid})")
+            };
             lines.push(format!(
-                "- [{title}](https://modrinth.com/mod/{slug}) has been updated from {old} to {now}"
+                "- [{title}]({project_url}) has been updated from {old_link} to {new_link}"
             ));
         }
         if let Some(lock) = &lock {
