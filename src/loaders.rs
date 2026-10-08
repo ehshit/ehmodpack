@@ -150,29 +150,43 @@ pub async fn from_maven(base: &str, mc: &str) -> Result<String> {
 }
 
 async fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T> {
-    client()?
+    let res = client()?
         .get(url)
         .send()
         .await
-        .with_context(|| format!("GET {url} failed"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url} returned an error"))?
-        .json()
+        .with_context(|| format!("GET {url} failed"))?;
+    let ctype = crate::http::content_type(&res);
+    let status = res.status();
+    let body = res
+        .bytes()
         .await
-        .with_context(|| format!("could not decode the response from {url}"))
+        .with_context(|| format!("could not read the response from {url}"))?
+        .to_vec();
+    crate::blockpage::check(url, &ctype, &body)?;
+    if !status.is_success() {
+        bail!("GET {url} returned an error");
+    }
+    serde_json::from_slice(&body).with_context(|| format!("could not decode the response from {url}"))
 }
 
 async fn get_text(url: &str) -> Result<String> {
-    client()?
+    let res = client()?
         .get(url)
         .send()
         .await
-        .with_context(|| format!("GET {url} failed"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url} returned an error"))?
-        .text()
+        .with_context(|| format!("GET {url} failed"))?;
+    let ctype = crate::http::content_type(&res);
+    let status = res.status();
+    let body = res
+        .bytes()
         .await
-        .with_context(|| format!("could not read the response from {url}"))
+        .with_context(|| format!("could not read the response from {url}"))?
+        .to_vec();
+    crate::blockpage::check(url, &ctype, &body)?;
+    if !status.is_success() {
+        bail!("GET {url} returned an error");
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 fn client() -> Result<reqwest::Client> {

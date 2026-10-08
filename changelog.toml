@@ -1,3 +1,10 @@
+[[2026-10-08]]
+changelogtext = """
+# Fixed:
+- Fetching now also trusts the OS certificate store, so behind a proxy that re-signs HTTPS the requests go through instead of dying on `UnknownIssuer`
+- Requests that come back as a webpage instead of the API now say so, and tell if it is an actual block page or just some random HTML in the way
+"""
+
 [[2026-10-07]]
 changelogtext = """
 # Added:

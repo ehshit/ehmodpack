@@ -1,3 +1,4 @@
+pub mod blockpage;
 pub mod build;
 pub mod cli;
 pub mod commands;

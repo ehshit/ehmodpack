@@ -1020,15 +1020,19 @@ impl Modrinth {
     }
 
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        Ok(self
-            .send(url)
-            .await?
-            .error_for_status()
-            .with_context(|| format!("GET {url} returned an error"))?
+        let res = self.send(url).await?;
+        let ctype = crate::http::content_type(&res);
+        let status = res.status();
+        let body = res
             .bytes()
             .await
             .with_context(|| format!("could not read the body from {url}"))?
-            .to_vec())
+            .to_vec();
+        crate::blockpage::check(url, &ctype, &body)?;
+        if !status.is_success() {
+            bail!("GET {url} returned an error");
+        }
+        Ok(body)
     }
 
     pub async fn game_versions(&self) -> Result<Vec<TagEntry>> {
@@ -1173,15 +1177,18 @@ impl Modrinth {
         } {
             return Ok(hit);
         }
-        let body = self
-            .send(url)
-            .await?
-            .error_for_status()
-            .with_context(|| format!("GET {url} returned an error"))?
+        let res = self.send(url).await?;
+        let ctype = crate::http::content_type(&res);
+        let status = res.status();
+        let body = res
             .bytes()
             .await
             .with_context(|| format!("could not read the body from {url}"))?
             .to_vec();
+        crate::blockpage::check(url, &ctype, &body)?;
+        if !status.is_success() {
+            bail!("GET {url} returned an error");
+        }
         let body = std::sync::Arc::new(body);
         let mut cache = self.cache.lock().expect("json cache poisoned");
         if cache.len() < 4096 {

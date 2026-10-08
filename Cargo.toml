@@ -38,7 +38,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 owo-colors = "4"
 onpath = "0.2"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "gzip"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "gzip", "rustls-tls-webpki-roots", "rustls-tls-native-roots"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

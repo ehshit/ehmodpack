@@ -1,5 +1,13 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
+
+pub fn content_type(res: &reqwest::Response) -> String {
+    res.headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
 
 #[derive(Clone)]
 pub struct Http {
@@ -21,28 +29,30 @@ impl Http {
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
-        self.get_bytes(url)
-            .await
-            .with_context(|| format!("could not decode the response from {url}"))
-            .and_then(|body| {
-                serde_json::from_slice(&body)
-                    .with_context(|| format!("could not parse the json from {url}"))
-            })
+        let body = self.get_bytes(url).await?;
+        serde_json::from_slice(&body)
+            .with_context(|| format!("could not parse the json from {url}"))
     }
 
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        Ok(self
+        let res = self
             .client
             .get(url)
             .send()
             .await
-            .with_context(|| format!("GET {url} failed"))?
-            .error_for_status()
-            .with_context(|| format!("GET {url} returned an error"))?
+            .with_context(|| format!("GET {url} failed"))?;
+        let ctype = content_type(&res);
+        let status = res.status();
+        let body = res
             .bytes()
             .await
             .with_context(|| format!("could not read the body from {url}"))?
-            .to_vec())
+            .to_vec();
+        crate::blockpage::check(url, &ctype, &body)?;
+        if !status.is_success() {
+            bail!("GET {url} returned an error");
+        }
+        Ok(body)
     }
 
     pub async fn get_text(&self, url: &str) -> Result<String> {
@@ -71,9 +81,16 @@ impl Http {
             .get(url)
             .send()
             .await
-            .with_context(|| format!("GET {url} failed"))?
-            .error_for_status()
-            .with_context(|| format!("GET {url} returned an error"))?;
+            .with_context(|| format!("GET {url} failed"))?;
+        let ctype = content_type(&response);
+        if !response.status().is_success() {
+            let body = response
+                .bytes()
+                .await
+                .with_context(|| format!("could not read the body from {url}"))?;
+            crate::blockpage::check(url, &ctype, &body)?;
+            bail!("GET {url} returned an error");
+        }
         let total = response.content_length();
         let mut bar = crate::progress::Bar::new(label);
         let mut body = Vec::new();
@@ -87,6 +104,7 @@ impl Http {
             bar.tick(body.len() as u64, total);
         }
         bar.done(body.len() as u64);
+        crate::blockpage::check(url, &ctype, &body)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
         }

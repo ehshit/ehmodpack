@@ -395,18 +395,27 @@ jobs:
               ]
               if macs:
 
-                  def _mtime(n):
-                      try:
-                          return os.path.getmtime(os.path.join("downloads", n))
-                      except OSError:
-                          return 0.0
+                  def _bin(frag):
+                      return next(
+                          (n[:-len(".tar.gz")] for n in sorted(macs) if frag in n),
+                          None,
+                      )
 
-                  latest = max(macs, key=_mtime)
-                  binary = latest[:-len(".tar.gz")]
+                  cmdapplesilicon = _bin("aarch64")
+                  cmdappleintel = _bin("x86_64")
+                  cmds = []
+                  if cmdapplesilicon:
+                      cmds.append(
+                          f"- `xattr -dr com.apple.quarantine {cmdapplesilicon}` (Apple Sillicon)"
+                      )
+                  if cmdappleintel:
+                      cmds.append(
+                          f"- `xattr -dr com.apple.quarantine {cmdappleintel}` (Apple Intel)"
+                      )
                   section += (
-                      "\n\n*MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings -> Privacy & Security, "
-                      "or if this is still not opening whitelist it from the quaratine with "
-                      f"`xattr -dr com.apple.quarantine {binary}`*"
+                      "\n\n*MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings --> Privacy & Security, "
+                      "or if this still not opening whitelist it from the quaratine on the terminal with:*\n\n"
+                      + "\n".join(cmds)
                   )
               extra.append(section)
           if len(prows) > 2:
