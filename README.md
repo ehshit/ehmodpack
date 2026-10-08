@@ -10,7 +10,7 @@
 
 </div>
 
-Does Nothing then create ModPacks for Modrinth by making it as a project, more prob in the wiki sooner then later when i get to create the stuff
+Does Nothing then create ModPacks for Modrinth by making it as a project, You can read more in the [Wiki](https://docs.ehis.gay/stuff/ehmodpack/) for anything that it has
 
 # What does it do then that?
 
@@ -40,3 +40,37 @@ When verify is ran it will look for any:
 
 *and more! including obviously builing the modpack*
 ![](/.github/tapes/build.gif)
+
+# Building
+
+needs [rust](https://rust-lang.org/learn/get-started/) (1.85+) on your computer, on linux you need to install the keyring:
+
+## On Ubuntu/Debian
+
+```sh
+sudo apt install libdbus-1-dev pkg-config
+```
+
+## On Fedora/RHEL
+
+```sh
+sudo dnf install dbus-devel pkgconf-pkg-config
+```
+
+## On Arch
+
+```sh
+sudo pacman -S dbus pkgconf
+```
+
+## On openSUSE
+
+```sh
+sudo zypper install dbus-1-devel pkg-config
+```
+
+## On Alpine
+
+```sh
+sudo apk add dbus-dev pkgconf
+```

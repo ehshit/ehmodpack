@@ -184,6 +184,7 @@ jobs:
           Section: games
           Priority: optional
           Architecture: $deb
+          Depends: libdbus-1-2
           Maintainer: ${maintainer:-ehmodpack}
           Installed-Size: $inst
           Homepage: https://github.com/ehshit/ehmodpack
