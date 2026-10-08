@@ -41,6 +41,41 @@ When verify is ran it will look for any:
 *and more! including obviously builing the modpack*
 ![](/.github/tapes/build.gif)
 
+
+## Running
+
+Running needs nothing, but it will most likely need libdbus to add the OS keychain when doing token saves, most builds will include it by default, but if it isn't run these in a terinal:
+
+## On Ubuntu/Debian
+
+```sh
+sudo apt install libdbus-1-2
+```
+
+## On Fedora/RHEL
+
+```sh
+sudo dnf install dbus-libs
+```
+
+## On Arch
+
+```sh
+sudo pacman -S dbus
+```
+
+## On openSUSE
+
+```sh
+sudo zypper install libdbus-1-3
+```
+
+## On Alpine
+
+```sh
+sudo apk add dbus-libs
+```
+
 # Building
 
 needs [rust](https://rust-lang.org/learn/get-started/) (1.85+) on your computer, on linux you need to install the keyring:
