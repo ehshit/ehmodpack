@@ -44,7 +44,7 @@ When verify is ran it will look for any:
 
 ## Running
 
-Running needs nothing, but it will most likely need libdbus to add the [OS keychain](https://docs.ehis.gay/stuff/ehmodpack/building-and-publishing/#without-workflows) when doing token saves, most builds will include it by default, but if it isn't run these in a terinal:
+Running needs nothing, but it will most likely need libdbus to add the [OS keychain](https://docs.ehis.gay/stuff/ehmodpack/building-and-publishing/#without-workflows) when doing token saves, most builds will include it by default, but if it isn't run these in a terminal:
 
 ## On Ubuntu/Debian
 
