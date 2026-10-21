@@ -1,9 +1,10 @@
-[[2026-10-08]]
+[[2026-10-21]]
 changelogtext = """
 # Fixed:
 - Fetching now also trusts the OS certificate store, so behind a proxy that re-signs HTTPS the requests go through instead of dying on `UnknownIssuer`
 - Requests that come back as a webpage instead of the API now say so, and tell if it is an actual block page or just some random HTML in the way
 - Modrinth links will now use `/project/<id>` instead of `/mod/icons` for resource packs that aren't mods
+- The certificate root package list was updated to drop the [eight compromised eMudhra/emSign intermediate CA certificates](https://emudhra.we-have-a-problem.com/), so the keys can no longer be used to forge a trusted `emSign ECC Root CA - G3` chain
 
 # Changed:
 - Changelogs will have links to old and new versions in modrinth
