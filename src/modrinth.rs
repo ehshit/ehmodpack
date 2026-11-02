@@ -1315,7 +1315,17 @@ impl Modrinth {
         }
         if project.project_type != "mod" {
             if let Some(mc) = mc {
-                versions.retain(|v| crate::modmeta::game_mc_ok(mc, &v.game_versions));
+                let (exact, loose): (Vec<MVersion>, Vec<MVersion>) = versions
+                    .into_iter()
+                    .partition(|v| v.game_versions.iter().any(|g| g.as_str() == mc));
+                versions = if exact.is_empty() {
+                    loose
+                        .into_iter()
+                        .filter(|v| crate::modmeta::game_mc_ok(mc, &v.game_versions))
+                        .collect()
+                } else {
+                    exact
+                };
             }
         }
         Ok(versions)

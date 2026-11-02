@@ -520,6 +520,9 @@ pub fn check(metas: &[ModMeta], target: &Target) -> Report {
                 continue;
             }
             if let Some(other) = metas.iter().find(|m| m.id.eq_ignore_ascii_case(&hate.id)) {
+                if !satisfied(&hate.range, &other.version) {
+                    continue;
+                }
                 warnings.push(Conflict {
                     offender: meta.id.clone(),
                     other: hate.id.clone(),
@@ -714,10 +717,34 @@ mod tests {
             required: true,
         });
         let found = check(
-            &[sodium, meta("sodium-extra", "0.8.3")],
+            &[sodium, meta("sodium-extra", "0.7.9")],
             &target(),
         );
         assert!(found.errors.is_empty(), "{:?}", found.errors);
+        assert_eq!(found.warnings.len(), 1);
+    }
+
+    #[test]
+    fn a_breaks_range_that_does_not_cover_the_installed_version_is_quiet() {
+        let mut sodium = meta("sodium", "0.8.7");
+        sodium.breaks.push(Depends {
+            id: "sodium-extra".to_string(),
+            range: "<0.8.0".to_string(),
+            required: true,
+        });
+        let found = check(&[sodium, meta("sodium-extra", "0.8.3")], &target());
+        assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+    }
+
+    #[test]
+    fn a_breaks_range_with_no_range_still_warns() {
+        let mut sodium = meta("sodium", "0.8.7");
+        sodium.breaks.push(Depends {
+            id: "sodium-extra".to_string(),
+            range: String::new(),
+            required: true,
+        });
+        let found = check(&[sodium, meta("sodium-extra", "0.8.3")], &target());
         assert_eq!(found.warnings.len(), 1);
     }
 

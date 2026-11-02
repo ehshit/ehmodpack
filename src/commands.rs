@@ -4532,6 +4532,14 @@ async fn verify_cmd(
         }
     }
 
+    if !std::io::stdin().is_terminal() {
+        say(
+            cli,
+            "Hi! you're NOT running it in a terminal, so you cannot do anything, run it on an actual terminal if you want to continue",
+        );
+        return Ok(());
+    }
+
     let fix = inquire::Confirm::new("fix these?")
         .with_default(true)
         .prompt()
@@ -5641,10 +5649,9 @@ fn order_entries(
         }
         out.push((id.to_string(), None));
     }
-    out.sort_by(|a, b| {
-        b.1.unwrap_or_default()
-            .rank()
-            .cmp(&a.1.unwrap_or_default().rank())
+    out.sort_by_key(|(_, position)| match position {
+        Some(sitting) => (0u8, sitting.rank()),
+        None => (1, u32::MAX),
     });
     out
 }

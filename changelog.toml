@@ -1,10 +1,14 @@
-[[2026-10-21]]
+[[2026-11-02]]
 changelogtext = """
 # Fixed:
 - Fetching now also trusts the OS certificate store, so behind a proxy that re-signs HTTPS the requests go through instead of dying on `UnknownIssuer`
 - Requests that come back as a webpage instead of the API now say so, and tell if it is an actual block page or just some random HTML in the way
 - Modrinth links will now use `/project/<id>` instead of `/mod/icons` for resource packs that aren't mods
 - The certificate root package list was updated to drop the [eight compromised eMudhra/emSign intermediate CA certificates](https://emudhra.we-have-a-problem.com/), so the keys can no longer be used to forge a trusted `emSign ECC Root CA - G3` chain
+- The resource pack order table now lists the top of the stack first, like the in-game screen does instead of printing the bottom first under a `top` header, so `order` no longer looks like it needs upside-down numbers
+- `add` now prefers a resource pack or shader version that lists the exact target Minecraft version, and only falls back to the same minor line when there is nothing exact, so a 1.21.11 build no longer sneaks into a 1.21.1 pack
+- `verify` only warns about a `breaks` conflict when the installed version is actually inside the declared broken range, so something like newer builds of EMF and ETF stop getting flagged as soft conflicts
+- `verify` no longer dies with `The input device is not a TTY` when there is no terminal
 
 # Changed:
 - Changelogs will have links to old and new versions in modrinth
