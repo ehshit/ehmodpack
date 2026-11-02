@@ -1315,17 +1315,7 @@ impl Modrinth {
         }
         if project.project_type != "mod" {
             if let Some(mc) = mc {
-                let (exact, loose): (Vec<MVersion>, Vec<MVersion>) = versions
-                    .into_iter()
-                    .partition(|v| v.game_versions.iter().any(|g| g.as_str() == mc));
-                versions = if exact.is_empty() {
-                    loose
-                        .into_iter()
-                        .filter(|v| crate::modmeta::game_mc_ok(mc, &v.game_versions))
-                        .collect()
-                } else {
-                    exact
-                };
+                versions = prefer_exact_mc(versions, mc);
             }
         }
         Ok(versions)
@@ -1426,6 +1416,20 @@ impl Modrinth {
     }
 }
 
+fn prefer_exact_mc(versions: Vec<MVersion>, mc: &str) -> Vec<MVersion> {
+    let (exact, loose): (Vec<MVersion>, Vec<MVersion>) = versions
+        .into_iter()
+        .partition(|v| v.game_versions.iter().any(|g| g.as_str() == mc));
+    if exact.is_empty() {
+        loose
+            .into_iter()
+            .filter(|v| crate::modmeta::game_mc_ok(mc, &v.game_versions))
+            .collect()
+    } else {
+        exact
+    }
+}
+
 fn encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
@@ -1441,4 +1445,53 @@ fn encode(value: &str) -> String {
 
 pub fn is_modrinth_id(s: &str) -> bool {
     s.len() == 8 && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn version(number: &str, games: &[&str]) -> MVersion {
+        MVersion {
+            id: number.to_string(),
+            project_id: String::new(),
+            name: String::new(),
+            version_number: number.to_string(),
+            version_type: "release".to_string(),
+            date_published: String::new(),
+            downloads: 0,
+            game_versions: games.iter().map(|g| (*g).to_string()).collect(),
+            loaders: Vec::new(),
+            dependencies: Vec::new(),
+            files: Vec::new(),
+        }
+    }
+
+    fn numbers(versions: &[MVersion]) -> Vec<&str> {
+        versions.iter().map(|v| v.version_number.as_str()).collect()
+    }
+
+    #[test]
+    fn an_exact_minecraft_version_beats_a_same_minor_one() {
+        let picked = prefer_exact_mc(
+            vec![
+                version("1.21.11-build", &["1.21.11"]),
+                version("1.21.1-build", &["1.21.1"]),
+            ],
+            "1.21.1",
+        );
+        assert_eq!(numbers(&picked), vec!["1.21.1-build"]);
+    }
+
+    #[test]
+    fn the_same_minor_build_is_the_fallback_when_nothing_is_exact() {
+        let picked = prefer_exact_mc(
+            vec![
+                version("1.21.11-build", &["1.21.11"]),
+                version("1.20.6-build", &["1.20.6"]),
+            ],
+            "1.21.1",
+        );
+        assert_eq!(numbers(&picked), vec!["1.21.11-build"]);
+    }
 }

@@ -4537,6 +4537,10 @@ async fn verify_cmd(
             cli,
             "Hi! you're NOT running it in a terminal, so you cannot do anything, run it on an actual terminal if you want to continue",
         );
+        let hard = bad.len() + errors.len() + version_conflicts.len();
+        if hard > 0 {
+            bail!("{hard} problem(s) still need fixing and there is no terminal to ask about it");
+        }
         return Ok(());
     }
 
@@ -5649,11 +5653,15 @@ fn order_entries(
         }
         out.push((id.to_string(), None));
     }
-    out.sort_by_key(|(_, position)| match position {
+    sort_by_stack_order(&mut out);
+    out
+}
+
+fn sort_by_stack_order(entries: &mut [(String, Option<RpPosition>)]) {
+    entries.sort_by_key(|(_, position)| match position {
         Some(sitting) => (0u8, sitting.rank()),
         None => (1, u32::MAX),
     });
-    out
 }
 
 fn looks_like_position(raw: &str) -> bool {
@@ -6557,10 +6565,27 @@ fn table(cli: &Cli, headers: &[&str], rows: &[Vec<String>], dimmed: &[bool]) -> 
 #[cfg(test)]
 mod order_tests {
     use super::{
-        order_specs, parse_position, set_positions, looks_like_position, RpPosition,
+        order_specs, parse_position, set_positions, looks_like_position, sort_by_stack_order,
+        RpPosition,
     };
     use crate::manifest::RpNamed;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn the_table_lists_the_top_of_the_stack_first() {
+        let mut entries = vec![
+            (
+                "floor.zip".to_string(),
+                Some(RpPosition::Named(RpNamed::Bottom)),
+            ),
+            ("top.zip".to_string(), Some(RpPosition::At(1))),
+            ("off.zip".to_string(), None),
+            ("second.zip".to_string(), Some(RpPosition::At(2))),
+        ];
+        sort_by_stack_order(&mut entries);
+        let names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, vec!["top.zip", "second.zip", "floor.zip", "off.zip"]);
+    }
 
     #[test]
     fn a_position_lands_on_every_picked_target() {
