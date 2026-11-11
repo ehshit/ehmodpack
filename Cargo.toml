@@ -1,9 +1,9 @@
 [package]
 name = "ehmodpack"
-version = "1.0.3"
+version = "1.0.4"
 authors = ["Eh's modpack <ehmodpack@ehis.gay>"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "it does modpacks because it says so"
 license = "MIT"
 repository = "https://github.com/ehshit/ehmodpack"

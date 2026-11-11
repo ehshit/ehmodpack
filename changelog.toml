@@ -1,4 +1,4 @@
-[[2026-11-02]]
+[[2026-11-11]]
 changelogtext = """
 # Fixed:
 - Fetching now also trusts the OS certificate store, so behind a proxy that re-signs HTTPS the requests go through instead of dying on `UnknownIssuer`
@@ -9,6 +9,10 @@ changelogtext = """
 - `add` now prefers a resource pack or shader version that lists the exact target Minecraft version, and only falls back to the same minor line when there is nothing exact, so a 1.21.11 build no longer sneaks into a 1.21.1 pack
 - `verify` only warns about a `breaks` conflict when the installed version is actually inside the declared broken range, so something like newer builds of EMF and ETF stop getting flagged as soft conflicts
 - `verify` no longer dies with `The input device is not a TTY` when there is no terminal
+- `test` now follows the resource pack order numbers instead of the order the entries sit in `packages.json`, so it agrees with what `build` writes
+- `order` with no arguments prints the current order instead of demanding a terminal
+- `--no-color` now also covers the conflict list
+- The minimum Rust version to compile is now 1.88
 
 # Changed:
 - Changelogs will have links to old and new versions in modrinth

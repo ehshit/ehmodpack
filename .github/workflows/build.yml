@@ -487,3 +487,16 @@ jobs:
             gh release upload "$tag" downloads/* --clobber
           fi
           gh release view "$tag"
+  winget:
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Publish to winget
+        uses: ehshit/winget-action@v1.1
+        with:
+          package-id: Eh.Modpack
+          asset-pattern: 'ehmodpack-windows-x86_64\.zip$'
+          fork-owner: nothuheh
+          token: ${{ secrets.WINGET_PUSH_TOKEN }}

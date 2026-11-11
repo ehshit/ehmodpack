@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha512};
 
-use crate::build::{inject_active, packs_on_disk};
+use crate::build::{inject_ordered, packs_on_disk};
 use crate::lock::LockedTarget;
 use crate::modrinth::Modrinth;
 
@@ -141,22 +141,12 @@ where
     }
     let options = dest.join("options.txt");
     if options.exists() {
-        let active: Vec<String> = target
-            .active_packs()
-            .iter()
-            .map(|p| {
-                p.path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&p.path)
-                    .to_string()
-            })
-            .collect();
+        let active = target.active_entries();
         if !active.is_empty() {
             let text = fs::read_to_string(&options)
                 .with_context(|| format!("could not read {}", options.display()))?;
             let local = packs_on_disk(&[("staged".to_string(), dest.to_path_buf())]);
-            fs::write(&options, inject_active(&text, &active, &local))?;
+            fs::write(&options, inject_ordered(&text, &active, &local))?;
             log(&format!("switched on {} resource packs", active.len()));
         }
     }

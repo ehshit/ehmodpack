@@ -3030,7 +3030,7 @@ async fn update_cmd(
     }
     if !bad.is_empty() {
         for line in &bad {
-            eprintln!("{}", line.red().bold());
+            error_line(cli, line);
         }
         bail!("update was aborted before anything was written");
     }
@@ -3583,14 +3583,12 @@ async fn test_cmd(
                 ),
             );
             for c in &conflicts.errors {
-                eprintln!(
-                    "{}",
-                    format!(
+                error_line(
+                    cli,
+                    &format!(
                         "  {} {} {}, wanted {}, found {}",
                         c.offender, c.kind, c.other, c.wanted, c.found
-                    )
-                    .red()
-                    .bold()
+                    ),
                 );
             }
             let go = inquire::Confirm::new("launch it anyway?")
@@ -4253,7 +4251,7 @@ async fn verify_cmd(
                     bad.push(format!("{} could not be downloaded: {e}", pkg.project));
                     if !keep_going {
                         steps.finish();
-                        eprintln!("{}", format!("  {e}").red().bold());
+                        error_line(cli, &format!("  {e}"));
                         bail!("stopped at the first failure, pass --keep-going to carry on");
                     }
                     continue;
@@ -4339,7 +4337,7 @@ async fn verify_cmd(
                         bad.push(msg.clone());
                         if !keep_going {
                             steps.finish();
-                            eprintln!("{}", msg.red().bold());
+                            error_line(cli, &msg);
                             bail!("stopped at the first failure, pass --keep-going to carry on");
                         }
                         continue;
@@ -4366,7 +4364,7 @@ async fn verify_cmd(
                     bad.push(format!("{} {}", pkg.project, e));
                     if !keep_going {
                         steps.finish();
-                        eprintln!("{}", format!("  {e}").red().bold());
+                        error_line(cli, &format!("  {e}"));
                         bail!("stopped at the first failure, pass --keep-going to carry on");
                     }
                 }
@@ -4398,7 +4396,7 @@ async fn verify_cmd(
             ),
         );
         for line in &wrong_id {
-            eprintln!("{}", line.red().bold());
+            error_line(cli, line);
         }
         bail!("some mods changed identity, update packages.json by hand before continuing");
     }
@@ -4474,14 +4472,12 @@ async fn verify_cmd(
             ),
         );
         for (label, c) in &errors {
-            eprintln!(
-                "{}",
-                format!(
+            error_line(
+                cli,
+                &format!(
                     "  {label}: {} {} {}, wanted {}, found {}",
                     c.offender, c.kind, c.other, c.wanted, c.found
-                )
-                .red()
-                .bold()
+                ),
             );
         }
     }
@@ -4497,7 +4493,7 @@ async fn verify_cmd(
             ),
         );
         for v in &version_conflicts {
-            eprintln!("  {}: {}", v.label, v.detail.red().bold());
+            error_line(cli, &format!("  {}: {}", v.label, v.detail));
         }
     }
 
@@ -4517,7 +4513,7 @@ async fn verify_cmd(
     println!();
     if !bad.is_empty() {
         for line in &bad {
-            eprintln!("{}", format!("  {line}").red().bold());
+            error_line(cli, &format!("  {line}"));
         }
     }
 
@@ -4559,6 +4555,10 @@ async fn verify_cmd(
                 bad.len(),
             ),
         );
+        let hard = bad.len() + errors.len() + version_conflicts.len();
+        if hard > 0 {
+            bail!("{hard} problem(s) are still there, so this run fails");
+        }
         return Ok(());
     }
 
@@ -4940,7 +4940,7 @@ fn print_report(cli: &Cli, report: &validate::Report) -> Result<()> {
         warn(cli, line);
     }
     for line in &report.errors {
-        eprintln!("{}", format!("  {line}").red().bold());
+        error_line(cli, &format!("  {line}"));
     }
     if report.ok() {
         say(
@@ -5664,6 +5664,28 @@ fn sort_by_stack_order(entries: &mut [(String, Option<RpPosition>)]) {
     });
 }
 
+fn print_order(cli: &Cli, p: &Project, lock: Option<&Lock>, targets: &[Target]) {
+    for target in targets {
+        say(
+            cli,
+            &format!("resource pack order for {}", Targetish::label(target)),
+        );
+        let entries = order_entries(p, target, lock);
+        if entries.is_empty() {
+            detail(cli, "nothing is active here");
+            continue;
+        }
+        let rows: Vec<Vec<String>> = entries
+            .iter()
+            .map(|(name, position)| vec![order_pos_label(*position), name.clone()])
+            .collect();
+        println!(
+            "{}",
+            table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+        );
+    }
+}
+
 fn looks_like_position(raw: &str) -> bool {
     let want = raw.trim();
     if want.is_empty() {
@@ -5912,6 +5934,16 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
     };
     let on_disk = external_pack_names(&p);
     let pack_shas = record_pack_shas(&p);
+
+    if !std::io::stdin().is_terminal() {
+        say(cli, "no terminal, so here is the order as it stands");
+        let targets: Vec<Target> = match (mc, loader) {
+            (None, None) => p.softwares.targets.clone(),
+            _ => vec![manifest::pick(&p.softwares.targets, mc, loader)?.clone()],
+        };
+        print_order(cli, &p, lock.as_ref(), &targets);
+        return Ok(());
+    }
 
     let labels: Vec<String> = p.softwares.targets.iter().map(Targetish::label).collect();
     let (targets, scope): (Vec<Target>, Vec<Option<String>>) = if mc.is_some() || loader.is_some() {
@@ -6453,6 +6485,14 @@ fn color_enabled(cli: &Cli) -> bool {
         return false;
     }
     std::io::stdout().is_terminal() && std::io::stderr().is_terminal()
+}
+
+fn error_line(cli: &Cli, text: &str) {
+    if color_enabled(cli) {
+        eprintln!("{}", text.red().bold());
+    } else {
+        eprintln!("{text}");
+    }
 }
 
 fn step(cli: &Cli, n: usize, total: usize, text: &str) {
