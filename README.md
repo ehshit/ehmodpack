@@ -78,7 +78,7 @@ sudo apk add dbus-libs
 
 # Building
 
-needs [rust](https://rust-lang.org/learn/get-started/) (1.85+) on your computer, on linux you need to install the keyring:
+needs [rust](https://rust-lang.org/learn/get-started/) (1.88+) on your computer, on linux you need to install the keyring:
 
 ## On Ubuntu/Debian
 
