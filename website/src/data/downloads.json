@@ -1,0 +1,108 @@
+{
+  "version": "1.0.4",
+  "tag": "v1.0.4",
+  "generatedAt": "2026-11-22T00:00:00Z",
+  "winget": {
+    "package": "Eh.Modpack",
+    "version": "1.0.4"
+  },
+  "archives": [
+    {
+      "system": "Windows x64",
+      "arch": "windows-x86_64",
+      "file": "ehmodpack-windows-x86_64.zip",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-windows-x86_64.zip"
+    },
+    {
+      "system": "macOS ARM64 (Apple Silicon)",
+      "arch": "macos-aarch64",
+      "file": "ehmodpack-macos-aarch64.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-macos-aarch64.tar.gz"
+    },
+    {
+      "system": "macOS Intel",
+      "arch": "macos-x86_64",
+      "file": "ehmodpack-macos-x86_64.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-macos-x86_64.tar.gz"
+    },
+    {
+      "system": "Linux x64",
+      "arch": "linux-x86_64",
+      "file": "ehmodpack-linux-x86_64.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-x86_64.tar.gz"
+    },
+    {
+      "system": "Linux ARM64",
+      "arch": "linux-aarch64",
+      "file": "ehmodpack-linux-aarch64.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-aarch64.tar.gz"
+    },
+    {
+      "system": "Linux ARMv7",
+      "arch": "linux-armv7",
+      "file": "ehmodpack-linux-armv7.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-armv7.tar.gz"
+    },
+    {
+      "system": "Linux i686",
+      "arch": "linux-i686",
+      "file": "ehmodpack-linux-i686.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-i686.tar.gz"
+    },
+    {
+      "system": "Linux PowerPC64 LE",
+      "arch": "linux-powerpc64le",
+      "file": "ehmodpack-linux-powerpc64le.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-powerpc64le.tar.gz"
+    },
+    {
+      "system": "Linux RISC-V 64",
+      "arch": "linux-riscv64gc",
+      "file": "ehmodpack-linux-riscv64gc.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-riscv64gc.tar.gz"
+    },
+    {
+      "system": "Linux s390x",
+      "arch": "linux-s390x",
+      "file": "ehmodpack-linux-s390x.tar.gz",
+      "url": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-linux-s390x.tar.gz"
+    }
+  ],
+  "linuxPackages": [
+    {
+      "system": "x64",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-amd64.deb",
+      "rpm": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-x86_64.rpm"
+    },
+    {
+      "system": "ARM64",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-arm64.deb",
+      "rpm": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-aarch64.rpm"
+    },
+    {
+      "system": "ARMv7",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-armhf.deb",
+      "rpm": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-armv7hl.rpm"
+    },
+    {
+      "system": "i686",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-i386.deb",
+      "rpm": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-i686.rpm"
+    },
+    {
+      "system": "PowerPC64 LE",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-ppc64el.deb",
+      "rpm": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-ppc64le.rpm"
+    },
+    {
+      "system": "RISC-V 64",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-riscv64.deb",
+      "rpm": null
+    },
+    {
+      "system": "s390x",
+      "deb": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-s390x.deb",
+      "rpm": "https://github.com/ehshit/ehmodpack/releases/download/v1.0.4/ehmodpack-1.0.4-s390x.rpm"
+    }
+  ]
+}

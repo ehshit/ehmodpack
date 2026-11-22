@@ -1,0 +1,113 @@
+{
+  "meta": {
+    "title": "Eh's Modpack",
+    "description": "Build, Create, and Publish Modrinth Modpacks with eh's modpack for no reason"
+  },
+  "nav": {
+    "brand": "Eh's Modpack",
+    "label": "Main navigation",
+    "home": "Home",
+    "downloads": "Downloads",
+    "privacy": "Privacy"
+  },
+  "hero": {
+    "headline": "It does modpacks and that's it",
+    "description": "Eh's Modpack allows you to simply make modpacks, what else do we do?",
+    "gifAlt": "Eh's Modpack creating a project and browsing panels in the terminal",
+    "download": "Get it",
+    "docs": "Read the wiki"
+  },
+  "features": {
+    "title": "What does it do then that?",
+    "resourceTitle": "Resource pack managing",
+    "resourceText": "You can manage the order of your resource packs so it uses the right ones when you build",
+    "importTitle": "Create from Modrinth Modpacks",
+    "importText": "Bring your modrinth modpack to Eh's Modpack easily with as simple as ONE command (yes really), plus you can bring your configuration too! (if you pass `--include-configs`)",
+    "verifyTitle": "Verify your content",
+    "verifyText": "Verify that hte modpack is right in place of everything, missing files, version warnings, wrong-loader downloads and apply the necessary",
+    "buildTitle": "Build the pack",
+    "buildText": "Build the modpack for all of your game versions and loaders, yes, that's the thing"
+  },
+  "downloads": {
+    "title": "Downloads",
+    "description": "Pick your OS, or just use cargo. This page is updated when a new version comes out.",
+    "version": "Latest version: {version}",
+    "tabs": {
+      "label": "Choose your operating system",
+      "windows": "Windows",
+      "macos": "macOS",
+      "linux": "Linux"
+    },
+    "hint": "Looks like you're on {os}. Here's what we'd grab.",
+    "recommended": "Recommended",
+    "get": "Get",
+    "copyCommand": "Copy command",
+    "directDescription": "Direct download, extract it and run ehmodpack.",
+    "windowsArchiveDescription": "Pick the Windows archive and grab the exe inside.",
+    "windowsNote": "The Windows download is a ZIP archive containing ehmodpack.exe.",
+    "macOSArchiveDescription": "Pick the build for your Mac.",
+    "linuxArchiveDescription": "Pick the archive for your CPU architecture.",
+    "or": "Or",
+    "linuxTabs": {
+      "label": "Linux download type",
+      "archives": "Archives",
+      "deb": "deb",
+      "rpm": "rpm"
+    },
+    "wingetTitle": "Via Winget",
+    "wingetDescription": "Same file, coming from winget",
+    "wingetVersion": "winget has version {version}",
+    "wingetNote": "Winget is in version {ver}",
+    "commandTabsLabel": "Install method",
+    "cargoTitle": "Cargo",
+    "cargoDescription": "You will need Rust 1.88 or newer",
+    "rustDownload": "(download Rust)",
+    "cargoCommand": "cargo install --git https://github.com/ehshit/ehmodpack --locked",
+    "cargoNote": "On Linux, cargo builds need libdbus and pkg-config installed first.",
+    "copy": "copy",
+    "copied": "copied",
+    "archivesTitle": "Binary archives",
+    "archivesDescription": "Plain archives for Windows, macOS, and Linux. Extract them and run ehmodpack.",
+    "windowsTitle": "Windows",
+    "macOSTitle": "macOS",
+    "linuxTitle": "Linux",
+    "macOSNote": "MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings --> Privacy & Security, or if this still not opening whitelist it from the quaratine on the terminal with:",
+    "macOSQuarantineArm": "`xattr -dr com.apple.quarantine ehmodpack-macos-aarch64` (Apple Sillicon),",
+    "macOSQuarantineIntel": "`xattr -dr com.apple.quarantine ehmodpack-macos-x86_64` (Apple Intel)",
+    "system": "System",
+    "file": "File",
+    "download": "Download",
+    "packagesTitle": "Linux packages",
+    "packagesDescription": "deb and rpm packages, generated from each new release.",
+    "unavailable": "not available",
+    "docs": "read the docs",
+    "releases": "all releases",
+    "source": "source code",
+    "crowdin": "help translate"
+  },
+  "privacyPage": {
+    "title": "Privacy Policy",
+    "intro": "Eh's Modpack creates, builds, verifies and tries modpacks, This privacy policy (being short by the way don't except much) covers what you need to know when you use the App",
+    "websiteTitle": "Website",
+    "websiteHostingTitle": "Hosting",
+    "websiteHostingText": "The website is hosted on Cloudflare Pages, so Cloudflare can see your IP address when the page loads (if you think the website doesn't have my ip you're wrong actually)",
+    "websiteDataTitle": "This website",
+    "websiteDataText": "The website itself has no login, ever. It has no accounts, no sign-in forms, and it will never ask you for a Microsoft Login or a Modrinth Token (if a website that is similar to ours says otherwise, it's likely a scam but who knows)",
+    "appTitle": "App",
+    "appLoginTitle": "Minecraft Login",
+    "appLoginText": "When you sign in with your Microsoft account for your Minecraft Profile, Microsoft and Xbox handle the authentication and receive what they need to verify your account, your account token is saved locally, encrypted in your OS keychain, or behind a passphrase if there is no keychain available, Eh's Modpack does not send it to any server of ours",
+    "appModrinthTitle": "Modrinth Token",
+    "appModrinthText": "A Modrinth Token you provide is saved the same way. It is only sent to Modrinth when the app needs it, like when publishing a modpack to your project page."
+  },
+  "publish": {
+    "note": "...and publish them of course"
+  },
+  "footer": {
+    "label": "Footer navigation",
+    "home": "Home",
+    "downloads": "Downloads",
+    "privacyLink": "Privacy",
+    "privacy": "Auth happens in the app. Tokens stay in your OS keychain. This website does not want your login.",
+    "made": "Made by Eh's Stuff (by eh)"
+  }
+}

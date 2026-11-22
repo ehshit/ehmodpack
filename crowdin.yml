@@ -6,6 +6,10 @@
     {
       "source": "/locales/en-US/cli.ftl",
       "translation": "/locales/%locale%/cli.ftl"
+    },
+    {
+      "source": "/website/src/locales/en-US/ui.json",
+      "translation": "/website/src/locales/%locale%/ui.json"
     }
   ]
 }

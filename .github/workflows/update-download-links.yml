@@ -1,0 +1,36 @@
+name: Update website download links
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-download-links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Generate website download data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/generate-downloads.py
+
+      - name: Commit generated download data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add website/src/data/downloads.json
+          if git diff --cached --quiet; then
+            echo "download data unchanged"
+          else
+            git commit -m "update download links for ${{ github.event.release.tag_name }}"
+            git push origin HEAD:master
+          fi

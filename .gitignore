@@ -4,3 +4,7 @@ dist
 ehmodpack.lock.json
 .built.json
 .env
+node_modules
+website/dist
+website/.wrangler
+__pycache__/
