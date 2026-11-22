@@ -1,3 +1,14 @@
+[[2026-11-22]]
+changelogtext = """
+# Added:
+- Microsoft account sign-in with `account --login`, `account --logout` and `account --show`
+- Crowdin translations with locales!
+
+# Fixed:
+- Failed `test` runs clean up their staging folder unless `--keep` is passed
+- Changelog writing now keeps entries newest date first, and the newest same-date entry stays the latest
+"""
+
 [[2026-11-11]]
 changelogtext = """
 # Fixed:

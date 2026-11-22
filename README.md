@@ -1,4 +1,4 @@
-# Eh's Modpacks
+# Eh's Modpack
 
 ![](/.github/tapes/readme.gif)
 
@@ -7,6 +7,7 @@
 <a href="https://github.com/ehshit/ehmodpack/releases">
   <img src="https://img.shields.io/github/v/release/ehshit/ehmodpack" alt="Latest Release"></a>
   <a href="#"><img src="https://img.shields.io/github/issues/ehshit/ehmodpack?style=flat&color=orange"></a>
+  <a title="Crowdin" target="_blank" href="https://crowdin.com/project/ehmodpack"><img src="https://badges.crowdin.net/ehmodpack/localized.svg"></a>
 
 </div>
 

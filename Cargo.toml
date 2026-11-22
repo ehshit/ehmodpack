@@ -30,7 +30,9 @@ argon2 = "0.5"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
+dotenvy = "0.15"
 flate2 = "1"
+fluent = "0.16"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 jsonc-parser = { version = "0.26", features = ["serde"] }
 inquire = "0.7"
@@ -48,8 +50,9 @@ sha2 = "0.10"
 tar = "0.4"
 terminal_size = "0.4"
 time = { version = "0.3", features = ["formatting", "macros"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 toml_edit = "0.22"
+unic-langid = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]

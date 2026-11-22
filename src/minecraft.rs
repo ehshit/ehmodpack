@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
+use serde::Deserialize;
 use sha1::{Digest, Sha1};
 
 pub const PISTON_META: &str = "https://piston-meta.mojang.com";
@@ -335,15 +335,12 @@ where
         if !lib.allowed(&os_name, &arch) {
             continue;
         }
-        if let Some(artifact) = lib
-            .downloads
-            .as_ref()
-            .and_then(|d| d.artifact.as_ref())
-        {
+        if let Some(artifact) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
             jobs.push((i, LibJob::Artifact(artifact.clone())));
             continue;
         }
-        if let (Some(classifier), Some(downloads)) = (lib.native_classifier(&os_name), &lib.downloads)
+        if let (Some(classifier), Some(downloads)) =
+            (lib.native_classifier(&os_name), &lib.downloads)
         {
             if let Some(native) = downloads
                 .classifiers
@@ -464,10 +461,7 @@ where
             .values()
             .map(|object| {
                 (
-                    format!(
-                        "{RESOURCE_PACK}/{}/{}",
-                        &object.hash[..2], object.hash
-                    ),
+                    format!("{RESOURCE_PACK}/{}/{}", &object.hash[..2], object.hash),
                     asset_path(base, &object.hash),
                     object.size,
                 )
@@ -525,10 +519,7 @@ where
         "natives_directory".to_string(),
         native_dir.to_string_lossy().replace('\\', "/"),
     );
-    vars.insert(
-        "launcher_name".to_string(),
-        "ehmodpack".to_string(),
-    );
+    vars.insert("launcher_name".to_string(), "ehmodpack".to_string());
     vars.insert("launcher_version".to_string(), "1".to_string());
     vars.insert(
         "classpath".to_string(),
@@ -617,11 +608,7 @@ pub fn extract_zip(jar: &Path, dest: &Path, exclude: &[String]) -> Result<usize>
     Ok(written)
 }
 
-async fn flatten<F>(
-    vanilla: &VersionJson,
-    loader: &VersionJson,
-    log: &mut F,
-) -> Result<VersionJson>
+async fn flatten<F>(vanilla: &VersionJson, loader: &VersionJson, log: &mut F) -> Result<VersionJson>
 where
     F: FnMut(&str),
 {
@@ -646,7 +633,33 @@ where
     Ok(out)
 }
 
-pub fn spawn(natives: &Natives, dir: &Path) -> Result<std::process::Child> {
+pub fn wants_user_type(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let Some(major) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
+        return false;
+    };
+    let Some(minor) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
+        return false;
+    };
+    if major != 1 {
+        return false;
+    }
+    if minor != 21 {
+        return minor < 21;
+    }
+    parts
+        .next()
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(0)
+        <= 8
+}
+
+pub fn spawn(
+    natives: &Natives,
+    dir: &Path,
+    session: Option<&crate::account::Session>,
+    mc_version: &str,
+) -> Result<std::process::Child> {
     let mut cmd = std::process::Command::new(&natives.java);
     for arg in split_jvm(&natives.jvm) {
         if arg.contains("${") {
@@ -654,23 +667,36 @@ pub fn spawn(natives: &Natives, dir: &Path) -> Result<std::process::Child> {
         }
         cmd.arg(arg);
     }
-    let child = cmd
-        .arg("--gameDir")
+    cmd.arg("--gameDir")
         .arg(dir)
         .arg("--assetsDir")
         .arg(dir.join(".minecraft-ehmodpack/assets"))
         .arg("--version")
         .arg(&natives.main_class)
-        .arg("--accessToken")
-        .arg("0")
-        .arg("--userType")
-        .arg("legacy")
-        .arg("--username")
-        .arg("Player")
-        .arg("--uuid")
-        .arg("00000000000000000000000000000000")
         .arg("--versionType")
-        .arg("release")
+        .arg("release");
+    match session {
+        Some(session) => {
+            cmd.arg("--username").arg(&session.name);
+            cmd.arg("--uuid").arg(&session.uuid);
+            cmd.arg("--accessToken").arg(&session.access_token);
+            if wants_user_type(mc_version) {
+                cmd.arg("--userType").arg("msa");
+            }
+            if let Some(xuid) = &session.xuid {
+                cmd.arg("--xuid").arg(xuid);
+            }
+        }
+        None => {
+            cmd.arg("--accessToken").arg("0");
+            if wants_user_type(mc_version) {
+                cmd.arg("--userType").arg("legacy");
+            }
+            cmd.arg("--username").arg("Player");
+            cmd.arg("--uuid").arg("00000000000000000000000000000000");
+        }
+    }
+    let child = cmd
         .current_dir(dir)
         .spawn()
         .with_context(|| format!("could not start {}", natives.java.display()))?;
@@ -706,9 +732,7 @@ fn rule_passes(rule: &Rule, ctx: &Ctx) -> bool {
         Some(os) => {
             let name_ok = match &os.name {
                 None => true,
-                Some(name) => {
-                    name == "*" || name.eq_ignore_ascii_case(&ctx.os_name)
-                }
+                Some(name) => name == "*" || name.eq_ignore_ascii_case(&ctx.os_name),
             };
             let arch_ok = match &os.arch {
                 Some(a) => a == &ctx.arch,
@@ -745,9 +769,9 @@ pub fn evaluate(args: &[Argument], ctx: &Ctx) -> Vec<String> {
                             match item {
                                 serde_json::Value::String(text) => out.push(text.clone()),
                                 serde_json::Value::Object(_) => {
-                                    if let Ok(nested) = serde_json::from_value::<Argument>(
-                                        item.clone(),
-                                    ) {
+                                    if let Ok(nested) =
+                                        serde_json::from_value::<Argument>(item.clone())
+                                    {
                                         out.extend(evaluate(&[nested], ctx));
                                     }
                                 }
@@ -772,7 +796,11 @@ pub struct JavaInstall {
 }
 
 pub fn java_exe_in(home: &Path) -> Option<PathBuf> {
-    let exe = if current_os() == "windows" { "java.exe" } else { "java" };
+    let exe = if current_os() == "windows" {
+        "java.exe"
+    } else {
+        "java"
+    };
     let nested = home.join("bin").join(exe);
     if nested.is_file() {
         return Some(nested);
@@ -865,7 +893,10 @@ pub fn probe_java(exe: &Path) -> Option<JavaInstall> {
     }
     let mut text = String::new();
     if version.is_none() {
-        let output = std::process::Command::new(exe).arg("-version").output().ok()?;
+        let output = std::process::Command::new(exe)
+            .arg("-version")
+            .output()
+            .ok()?;
         text = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stderr),
@@ -890,7 +921,9 @@ pub fn all_javas() -> Vec<JavaInstall> {
     let mut out: Vec<JavaInstall> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for dir in java_candidates() {
-        let Some(exe) = java_exe_in(&dir) else { continue };
+        let Some(exe) = java_exe_in(&dir) else {
+            continue;
+        };
         let key = dir
             .canonicalize()
             .unwrap_or_else(|_| dir.clone())
@@ -912,7 +945,9 @@ pub fn java_of(candidates: &[PathBuf], required_major: u32) -> Result<(PathBuf, 
     let mut seen = Vec::new();
     let mut found: Vec<(PathBuf, u32)> = Vec::new();
     for dir in candidates {
-        let Some(exe) = java_exe_in(dir) else { continue };
+        let Some(exe) = java_exe_in(dir) else {
+            continue;
+        };
         if seen.contains(&exe) {
             continue;
         }
@@ -937,7 +972,9 @@ pub fn java_of(candidates: &[PathBuf], required_major: u32) -> Result<(PathBuf, 
         .map(|(p, m)| format!("java {m} at {}", p.display()))
         .collect::<Vec<_>>()
         .join(", ");
-    bail!("no java {required_major} or newer was found (found: {have}), ehmodpack looked in {looked}")
+    bail!(
+        "no java {required_major} or newer was found (found: {have}), ehmodpack looked in {looked}"
+    )
 }
 
 pub fn java_for_minecraft(minecraft: &str) -> Option<u32> {
@@ -986,7 +1023,10 @@ pub fn parse_java_major(text: &str) -> Option<u32> {
         }
     }
     for word in text.split_whitespace() {
-        if let Ok(v) = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').parse::<f64>() {
+        if let Ok(v) = word
+            .trim_matches(|c: char| !c.is_ascii_digit() && c != '.')
+            .parse::<f64>()
+        {
             if v > 1.0 {
                 return Some(v as u32);
             }
@@ -1077,7 +1117,10 @@ pub async fn asset_index(
     dir: &Path,
     index: &AssetIndexRef,
 ) -> Result<BTreeMap<String, AssetObject>> {
-    let out = dir.join("assets").join("indexes").join(format!("{}.json", index.id));
+    let out = dir
+        .join("assets")
+        .join("indexes")
+        .join(format!("{}.json", index.id));
     if out.is_file() {
         let text = std::fs::read_to_string(&out)?;
         return Ok(parse_asset_index(&text));
@@ -1302,12 +1345,14 @@ mod tests {
     fn a_windows_rule_only_fires_on_windows() {
         let mut linux = Ctx::default();
         linux.os_name = "linux".to_string();
-        assert!(!evaluate(&real_1_21_11_args(), &linux)
-            .contains(&"-Dos.name=Windows 10".to_string()));
+        assert!(
+            !evaluate(&real_1_21_11_args(), &linux).contains(&"-Dos.name=Windows 10".to_string())
+        );
         let mut windows = Ctx::default();
         windows.os_name = "windows".to_string();
-        assert!(evaluate(&real_1_21_11_args(), &windows)
-            .contains(&"-Dos.name=Windows 10".to_string()));
+        assert!(
+            evaluate(&real_1_21_11_args(), &windows).contains(&"-Dos.name=Windows 10".to_string())
+        );
     }
 
     #[test]
@@ -1329,9 +1374,13 @@ mod tests {
         )
         .unwrap();
         let mut ctx = Ctx::default();
-        ctx.features.insert("has_custom_resolution".to_string(), true);
+        ctx.features
+            .insert("has_custom_resolution".to_string(), true);
         let out = evaluate(&args, &ctx);
-        assert_eq!(out, vec!["--width".to_string(), "${resolution_width}".to_string()]);
+        assert_eq!(
+            out,
+            vec!["--width".to_string(), "${resolution_width}".to_string()]
+        );
     }
 
     #[test]
@@ -1380,13 +1429,14 @@ mod tests {
         let v: VersionJson = serde_json::from_str(text).expect("should parse");
         assert_eq!(v.inherits_from.as_deref(), Some("1.21.11"));
         assert!(v.main_class.ends_with("KnotClient"));
-        assert!(!v
-            .arguments
-            .unwrap()
-            .jvm
-            .iter()
-            .collect::<Vec<_>>()
-            .is_empty());
+        assert!(
+            !v.arguments
+                .unwrap()
+                .jvm
+                .iter()
+                .collect::<Vec<_>>()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1489,6 +1539,15 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn user_type_is_only_sent_on_versions_that_understand_it() {
+        assert!(wants_user_type("1.20.4"));
+        assert!(wants_user_type("1.21.8"));
+        assert!(!wants_user_type("1.21.9"));
+        assert!(!wants_user_type("1.21.11"));
+        assert!(!wants_user_type("26.1"));
+    }
+
     #[test]
     fn library_file_lands_under_libraries() {
         let got = library_file(Path::new("/tmp"), "org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3.jar");

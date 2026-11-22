@@ -1,11 +1,9 @@
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::{
-    Env, LoaderSpec, PkgType, RpPosition, Targetish, LOCK_FILE,
-};
+use crate::manifest::{Env, LOCK_FILE, LoaderSpec, PkgType, RpPosition, Targetish};
 use crate::modrinth::Hashes;
 
 pub const LOCK_VERSION: u32 = 3;

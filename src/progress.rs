@@ -70,10 +70,7 @@ impl Bar {
                     ),
                 )
             }
-            _ => (
-                format!("[{}]", "~".repeat(BAR)),
-                crate::staging::human(got),
-            ),
+            _ => (format!("[{}]", "~".repeat(BAR)), crate::staging::human(got)),
         };
         let tail = match total {
             Some(t) if t > 0 => {

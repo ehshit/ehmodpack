@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::sync::OnceLock;
 
 const MATCH_CAP: usize = 256 * 1024;
@@ -13,9 +13,7 @@ const FINGERPRINT: &str = r#"(?is)(?:you have tried to access a web page.{0,100}
 
 fn fingerprint() -> &'static regex::Regex {
     static CELL: OnceLock<regex::Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        regex::Regex::new(FINGERPRINT).expect("fingerprint regex must compile")
-    })
+    CELL.get_or_init(|| regex::Regex::new(FINGERPRINT).expect("fingerprint regex must compile"))
 }
 
 pub fn check(url: &str, content_type: &str, body: &[u8]) -> Result<()> {
@@ -142,7 +140,8 @@ mod tests {
 
     #[test]
     fn usage_policy_phrases_match() {
-        let body = b"<!doctype html><html><body>in violation of our acceptable use policy</body></html>";
+        let body =
+            b"<!doctype html><html><body>in violation of our acceptable use policy</body></html>";
         assert_eq!(detect("text/html", body), Some(Hit::BlockPage));
     }
 
@@ -197,7 +196,8 @@ mod tests {
 
     #[test]
     fn message_without_an_override_still_reads_clean() {
-        let msg = blocked_message("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json");
+        let msg =
+            blocked_message("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json");
         assert!(msg.contains("Mojang's version manifest"));
         assert!(!msg.contains("EHMODPACK_"));
     }

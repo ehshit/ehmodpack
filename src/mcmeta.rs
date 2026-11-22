@@ -44,9 +44,7 @@ pub fn supports(mcmeta: &[u8], format: u32) -> bool {
         return false;
     }
     let target = (format, 0u32);
-    ranges
-        .iter()
-        .any(|(lo, hi)| *lo <= target && target <= *hi)
+    ranges.iter().any(|(lo, hi)| *lo <= target && target <= *hi)
 }
 
 pub fn zip_supports(bytes: &[u8], format: u32) -> bool {
@@ -106,7 +104,9 @@ fn push_new_style(ranges: &mut Vec<Range>, obj: &serde_json::Value) {
         return;
     }
     let min = min_raw.and_then(new_bound).unwrap_or((0, 0));
-    let max = max_raw.and_then(new_bound).unwrap_or((ANY_MINOR, ANY_MINOR));
+    let max = max_raw
+        .and_then(new_bound)
+        .unwrap_or((ANY_MINOR, ANY_MINOR));
     ranges.push((min, max));
 }
 

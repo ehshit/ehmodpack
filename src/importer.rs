@@ -2,12 +2,15 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use crate::i18n;
 use crate::manifest::{Env, PkgType, Support};
 
-pub const LICENSE_WARNING: &str = "While we have this for building a project out of a modrinth modpack please make sure that you got permissions to use this modpack according to their project licenses and Modrinth's content rules!";
+pub fn license_warning() -> String {
+    i18n::t("import-license-warning")
+}
 
 #[derive(Debug, Clone)]
 pub struct IndexFile {
@@ -34,24 +37,30 @@ impl IndexFile {
 }
 
 pub fn read_index(path: &Path) -> Result<Value> {
-    let file = fs::File::open(path).with_context(|| format!("could not open {}", path.display()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .with_context(|| format!("{} is not a readable zip", path.display()))?;
+    let file = fs::File::open(path).with_context(|| {
+        i18n::t_args(
+            "import-open-failed",
+            &[("path", &path.display().to_string())],
+        )
+    })?;
+    let mut archive = zip::ZipArchive::new(file).with_context(|| {
+        i18n::t_args("import-not-zip", &[("path", &path.display().to_string())])
+    })?;
     let mut text = String::new();
     archive
         .by_name("modrinth.index.json")
-        .context("this archive has no modrinth.index.json, so it is not an mrpack")?
+        .context(i18n::t("import-no-index"))?
         .read_to_string(&mut text)
-        .context("could not read modrinth.index.json")?;
-    serde_json::from_str(&text).context("could not parse modrinth.index.json")
+        .context(i18n::t("import-index-read-failed"))?;
+    serde_json::from_str(&text).context(i18n::t("import-index-parse-failed"))
 }
 
 pub fn name_of(index: &Value) -> String {
     index
         .get("name")
         .and_then(Value::as_str)
-        .unwrap_or("imported pack")
-        .to_string()
+        .map(str::to_string)
+        .unwrap_or_else(|| i18n::t("import-default-name"))
 }
 
 pub fn summary_of(index: &Value) -> String {
@@ -76,7 +85,7 @@ pub fn minecraft_of(index: &Value) -> Result<String> {
         .and_then(|d| d.get("minecraft"))
         .and_then(Value::as_str)
         .map(str::to_string)
-        .context("this modpack does not say which minecraft version it targets")
+        .context(i18n::t("import-no-minecraft"))
 }
 
 pub fn loaders_of(index: &Value) -> Vec<(String, String)> {
@@ -115,13 +124,13 @@ pub fn files_of(index: &Value) -> Result<Vec<IndexFile>> {
     let list = index
         .get("files")
         .and_then(Value::as_array)
-        .context("this modpack has no files array")?;
+        .context(i18n::t("import-no-files"))?;
     let mut out = Vec::new();
     for entry in list {
         let path = entry
             .get("path")
             .and_then(Value::as_str)
-            .context("a file entry has no path")?;
+            .context(i18n::t("import-entry-no-path"))?;
         let downloads: Vec<String> = entry
             .get("downloads")
             .and_then(Value::as_array)
@@ -141,11 +150,7 @@ pub fn files_of(index: &Value) -> Result<Vec<IndexFile>> {
                     .map(|(p, v)| (p.to_string(), v.to_string()))
             })
             .map(|(p, v)| (p.to_string(), v.to_string()))
-            .with_context(|| {
-                format!(
-                    "{path} does not come from modrinth, so ehmodpack cannot track it. Add it to the overrides folder instead."
-                )
-            })?;
+            .with_context(|| i18n::t_args("import-not-modrinth-file", &[("path", &path)]))?;
         let hashes = entry.get("hashes").cloned().unwrap_or(Value::Null);
         out.push(IndexFile {
             path: path.to_string(),
@@ -196,7 +201,12 @@ pub fn extract_overrides(
     include_configs: bool,
     out: &mut Vec<(String, PathBuf)>,
 ) -> Result<usize> {
-    let file = fs::File::open(mrpack).with_context(|| format!("could not open {}", mrpack.display()))?;
+    let file = fs::File::open(mrpack).with_context(|| {
+        i18n::t_args(
+            "import-open-failed",
+            &[("path", &mrpack.display().to_string())],
+        )
+    })?;
     let mut archive = zip::ZipArchive::new(file)?;
     let mut written = 0usize;
     for prefix in ["overrides", "client-overrides", "server-overrides"] {
@@ -219,13 +229,21 @@ pub fn extract_overrides(
             }
             let target = root.join(&name);
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("could not create {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    i18n::t_args(
+                        "import-create-dir-failed",
+                        &[("path", &parent.display().to_string())],
+                    )
+                })?;
             }
             let mut data = Vec::new();
             entry.read_to_end(&mut data)?;
-            fs::write(&target, data)
-                .with_context(|| format!("could not write {}", target.display()))?;
+            fs::write(&target, data).with_context(|| {
+                i18n::t_args(
+                    "import-write-failed",
+                    &[("path", &target.display().to_string())],
+                )
+            })?;
             written += 1;
         }
     }
@@ -258,13 +276,21 @@ pub fn ensure_empty_dir(dir: &Path, force: bool) -> Result<()> {
         return Ok(());
     }
     let empty = fs::read_dir(dir)
-        .with_context(|| format!("could not read {}", dir.display()))?
+        .with_context(|| {
+            i18n::t_args(
+                "import-read-dir-failed",
+                &[("path", &dir.display().to_string())],
+            )
+        })?
         .next()
         .is_none();
     if !empty && !force {
         bail!(
-            "{} already exists and is not empty, pass --force to write into it anyway",
-            dir.display()
+            "{}",
+            i18n::t_args(
+                "import-dir-not-empty",
+                &[("path", &dir.display().to_string())],
+            )
         );
     }
     Ok(())

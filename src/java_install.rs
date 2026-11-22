@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 pub const VENDORS: &[(&str, &str)] = &[
     ("eclipse-adoptium", "Eclipse Adoptium (Temurin)"),
@@ -129,7 +129,8 @@ fn extract(archive: &Path, into: &Path) -> Result<()> {
     std::fs::create_dir_all(into)?;
     if archive.to_string_lossy().ends_with(".zip") {
         let file = std::fs::File::open(archive)?;
-        let mut zip = zip::ZipArchive::new(file).context("the java archive is not a readable zip")?;
+        let mut zip =
+            zip::ZipArchive::new(file).context("the java archive is not a readable zip")?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             let Some(rel) = entry.enclosed_name() else {
@@ -171,7 +172,10 @@ where
         && let Some((_, found)) = crate::minecraft::java_at_home(&home)
         && found >= major
     {
-        log(&format!("java {major} is already installed at {}", home.display()));
+        log(&format!(
+            "java {major} is already installed at {}",
+            home.display()
+        ));
         return Ok(home);
     }
     let url = url_for(http, vendor, major).await?;
@@ -210,8 +214,7 @@ fn append_line(file: &Path, line: &str) -> Result<()> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(file, text)
-        .with_context(|| format!("could not write {}", file.display()))
+    std::fs::write(file, text).with_context(|| format!("could not write {}", file.display()))
 }
 
 pub fn set_java_home(home: &Path, add_path: bool) -> Result<bool> {
@@ -244,8 +247,8 @@ pub fn set_java_home(home: &Path, add_path: bool) -> Result<bool> {
         }
     }
     if add_path {
-        let report = onpath::add(&bin, "ehmodpack-java")
-            .context("could not add java to your PATH")?;
+        let report =
+            onpath::add(&bin, "ehmodpack-java").context("could not add java to your PATH")?;
         println!("{report}");
     }
     Ok(add_path)

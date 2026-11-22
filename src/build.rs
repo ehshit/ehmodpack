@@ -205,13 +205,11 @@ pub fn inject_ordered(
     active: &[(String, Option<RpPosition>)],
     local: &[String],
 ) -> String {
-    let existing = read_list(options, "resourcePacks")
-        .unwrap_or_else(|| vec!["vanilla".to_string()]);
+    let existing =
+        read_list(options, "resourcePacks").unwrap_or_else(|| vec!["vanilla".to_string()]);
     let mut ranked: Vec<(String, u32)> = active
         .iter()
-        .map(|(entry, position)| {
-            (entry.clone(), position.unwrap_or_default().rank())
-        })
+        .map(|(entry, position)| (entry.clone(), position.unwrap_or_default().rank()))
         .collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1));
     let wanted: Vec<String> = ranked.iter().map(|(entry, _)| entry.clone()).collect();
@@ -235,7 +233,8 @@ pub fn inject_ordered(
         if !packs.contains(&entry) {
             packs.push(entry);
         }
-    }    for entry in wanted {
+    }
+    for entry in wanted {
         if !packs.contains(&entry) {
             packs.push(entry);
         }
@@ -243,7 +242,11 @@ pub fn inject_ordered(
 
     let mut out = write_list(options, "resourcePacks", &packs);
     if text_has_key(&out, "incompatibleResourcePacks") {
-        out = replace_line(&out, "incompatibleResourcePacks", "incompatibleResourcePacks:[]");
+        out = replace_line(
+            &out,
+            "incompatibleResourcePacks",
+            "incompatibleResourcePacks:[]",
+        );
     } else {
         if !out.ends_with('\n') {
             out.push('\n');

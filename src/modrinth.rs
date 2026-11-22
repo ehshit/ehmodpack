@@ -1,7 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::i18n;
 use crate::useragent::USER_AGENT;
 
 pub const DEFAULT_API: &str = "https://api.modrinth.com/v2";
@@ -69,31 +70,31 @@ impl Disclosure {
         ]
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::AiContent => "AI-generated content (code / assets / text)",
-            Self::AiFunctionality => "Uses AI functionality (chatbot)",
-            Self::Advertisements => "advertisements",
-            Self::EpilepsyTriggers => "photosensitivity triggers",
-            Self::SystemInteractions => "talks to external systems",
-            Self::Telemetry => "telemetry (opt-in / opt-out / always on)",
-            Self::DerivativeWork => "derivative work (fork)",
-            Self::PaidFeatures => "paid features",
-            Self::Archived => "archived",
+            Self::AiContent => i18n::t("disclosure-ai-content"),
+            Self::AiFunctionality => i18n::t("disclosure-ai-functionality"),
+            Self::Advertisements => i18n::t("disclosure-advertisements"),
+            Self::EpilepsyTriggers => i18n::t("disclosure-epilepsy-triggers"),
+            Self::SystemInteractions => i18n::t("disclosure-system-interactions"),
+            Self::Telemetry => i18n::t("disclosure-telemetry"),
+            Self::DerivativeWork => i18n::t("disclosure-derivative-work"),
+            Self::PaidFeatures => i18n::t("disclosure-paid-features"),
+            Self::Archived => i18n::t("disclosure-archived"),
         }
     }
 
-    pub fn short(self) -> &'static str {
+    pub fn short(self) -> String {
         match self {
-            Self::AiContent => "AI-generated content",
-            Self::AiFunctionality => "Uses AI functionality (chatbot)",
-            Self::Advertisements => "advertisements",
-            Self::EpilepsyTriggers => "photosensitivity triggers",
-            Self::SystemInteractions => "talks to external systems",
-            Self::Telemetry => "telemetry",
-            Self::DerivativeWork => "derivative work",
-            Self::PaidFeatures => "paid features",
-            Self::Archived => "archived",
+            Self::AiContent => i18n::t("disclosure-short-ai-content"),
+            Self::AiFunctionality => i18n::t("disclosure-short-ai-functionality"),
+            Self::Advertisements => i18n::t("disclosure-short-advertisements"),
+            Self::EpilepsyTriggers => i18n::t("disclosure-short-epilepsy-triggers"),
+            Self::SystemInteractions => i18n::t("disclosure-short-system-interactions"),
+            Self::Telemetry => i18n::t("disclosure-short-telemetry"),
+            Self::DerivativeWork => i18n::t("disclosure-short-derivative-work"),
+            Self::PaidFeatures => i18n::t("disclosure-short-paid-features"),
+            Self::Archived => i18n::t("disclosure-short-archived"),
         }
     }
 
@@ -167,18 +168,18 @@ impl Environment {
         ]
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::ClientAndServer => "client and server",
-            Self::ClientOnly => "client only",
-            Self::ClientOnlyServerOptional => "client only, server optional",
-            Self::SingleplayerOnly => "singleplayer only",
-            Self::ServerOnly => "server only",
-            Self::ServerOnlyClientOptional => "server only, client optional",
-            Self::DedicatedServerOnly => "dedicated server only",
-            Self::ClientOrServer => "client or server",
-            Self::ClientOrServerPrefersBoth => "client or server, prefers both",
-            Self::Unknown => "unknown",
+            Self::ClientAndServer => i18n::t("env-client-and-server"),
+            Self::ClientOnly => i18n::t("env-client-only"),
+            Self::ClientOnlyServerOptional => i18n::t("env-client-only-server-optional"),
+            Self::SingleplayerOnly => i18n::t("env-singleplayer-only"),
+            Self::ServerOnly => i18n::t("env-server-only"),
+            Self::ServerOnlyClientOptional => i18n::t("env-server-only-client-optional"),
+            Self::DedicatedServerOnly => i18n::t("env-dedicated-server-only"),
+            Self::ClientOrServer => i18n::t("env-client-or-server"),
+            Self::ClientOrServerPrefersBoth => i18n::t("env-client-or-server-prefers-both"),
+            Self::Unknown => i18n::t("unknown"),
         }
     }
 }
@@ -275,7 +276,10 @@ pub fn token_looks_wrong(token: &str) -> bool {
     if t.is_empty() {
         return true;
     }
-    !matches!(t.split_once('_'), Some(("mrp", _)) | Some(("mra", _)) | Some(("mro", _)))
+    !matches!(
+        t.split_once('_'),
+        Some(("mrp", _)) | Some(("mra", _)) | Some(("mro", _))
+    )
 }
 
 impl Modrinth {
@@ -298,10 +302,7 @@ impl Modrinth {
         if lower.contains("auth method") {
             return AuthFailure::Invalid(blob);
         }
-        if lower.contains("credential")
-            || lower.contains("expire")
-            || lower.contains("revoked")
-        {
+        if lower.contains("credential") || lower.contains("expire") || lower.contains("revoked") {
             return AuthFailure::Expired(blob);
         }
         if status.as_u16() == 401 || lower.contains("auth") {
@@ -350,7 +351,10 @@ impl Modrinth {
         Ok(res.status().is_success())
     }
 
-    pub async fn owned_projects(&self, token: &str) -> Result<Result<Vec<ProjectStub>, AuthFailure>> {
+    pub async fn owned_projects(
+        &self,
+        token: &str,
+    ) -> Result<Result<Vec<ProjectStub>, AuthFailure>> {
         let res = self
             .authed(token)?
             .get(format!("{}/projects", self.base))
@@ -367,11 +371,7 @@ impl Modrinth {
     pub async fn project_versions(&self, token: &str, id: &str) -> Result<Vec<VersionStub>> {
         let res = self
             .authed(token)?
-            .get(format!(
-                "{}/project/{}/version",
-                self.base,
-                encode(id)
-            ))
+            .get(format!("{}/project/{}/version", self.base, encode(id)))
             .header("Authorization", token)
             .send()
             .await
@@ -454,7 +454,6 @@ impl Modrinth {
     }
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct DerivativeSource {
     #[serde(default)]
@@ -500,14 +499,19 @@ impl DisclosureDetail {
 
     pub fn heading(&self) -> String {
         let kind = match self.kind() {
-            Some(d) => d.short().to_string(),
+            Some(d) => d.short(),
             None => self.r#type.clone(),
         };
         match self.consent.as_deref() {
-            Some("opt_in") => format!("{kind} (opt-in)"),
-            Some("opt_out") => format!("{kind} (opt-out)"),
-            Some("always_active") => format!("{kind} (always active)"),
-            Some(other) => format!("{kind} ({other})"),
+            Some("opt_in") => i18n::t_args("disclosure-opt-in", &[("kind", kind.as_str())]),
+            Some("opt_out") => i18n::t_args("disclosure-opt-out", &[("kind", kind.as_str())]),
+            Some("always_active") => {
+                i18n::t_args("disclosure-always-active", &[("kind", kind.as_str())])
+            }
+            Some(other) => i18n::t_args(
+                "disclosure-consent",
+                &[("kind", kind.as_str()), ("consent", other)],
+            ),
             None => kind,
         }
     }
@@ -524,9 +528,18 @@ impl DisclosureDetail {
             push(n);
         }
         if !self.uses.is_empty() {
-            push(&format!("applies to: {}", self.uses.join(", ")));
+            let list = self.uses.join(", ");
+            push(&i18n::t_args(
+                "disclosure-applies-to",
+                &[("list", list.as_str())],
+            ));
         }
-        for d in self.data_collected.iter().chain(&self.features).chain(&self.interactions) {
+        for d in self
+            .data_collected
+            .iter()
+            .chain(&self.features)
+            .chain(&self.interactions)
+        {
             push(d);
         }
         for s in &self.sources {
@@ -642,61 +655,82 @@ impl SearchFilters {
     pub fn active_lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         if !self.project_types.is_empty() {
-            out.push(format!(
-                "type: {}",
-                self.project_types.join(", ")
-            ));
+            let list = self.project_types.join(", ");
+            out.push(i18n::t_args("filter-line-type", &[("list", list.as_str())]));
         }
         if !self.categories.is_empty() {
-            out.push(format!("category: {}", self.categories.join(", ")));
+            let list = self.categories.join(", ");
+            out.push(i18n::t_args(
+                "filter-line-category",
+                &[("list", list.as_str())],
+            ));
         }
         if !self.exclude_categories.is_empty() {
-            out.push(format!(
-                "not category: {}",
-                self.exclude_categories.join(", ")
+            let list = self.exclude_categories.join(", ");
+            out.push(i18n::t_args(
+                "filter-line-not-category",
+                &[("list", list.as_str())],
             ));
         }
         if !self.versions.is_empty() {
-            out.push(format!("minecraft: {}", self.versions.join(", ")));
+            let list = self.versions.join(", ");
+            out.push(i18n::t_args(
+                "filter-line-minecraft",
+                &[("list", list.as_str())],
+            ));
         }
         if !self.loaders.is_empty() {
-            out.push(format!("loader: {}", self.loaders.join(", ")));
+            let list = self.loaders.join(", ");
+            out.push(i18n::t_args(
+                "filter-line-loader",
+                &[("list", list.as_str())],
+            ));
         }
         if !self.environments.is_empty() {
-            out.push(format!(
-                "environment: {}",
-                self.environments
-                    .iter()
-                    .map(|e| e.label())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            let list = self
+                .environments
+                .iter()
+                .map(|e| e.label())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(i18n::t_args(
+                "filter-line-environment",
+                &[("list", list.as_str())],
             ));
         }
         match self.open_source {
-            Some(true) => out.push("open source only".to_string()),
-            Some(false) => out.push("closed source only".to_string()),
+            Some(true) => out.push(i18n::t("filter-open-only-open")),
+            Some(false) => out.push(i18n::t("filter-open-only-closed")),
             None => {}
         }
         if !self.include_disclosures.is_empty() {
-            out.push(format!(
-                "disclosed: {}",
-                self.include_disclosures
-                    .iter()
-                    .map(|d| d.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+            let list = self
+                .include_disclosures
+                .iter()
+                .map(|d| d.label())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(i18n::t_args(
+                "filter-line-disclosed",
+                &[("list", list.as_str())],
             ));
         }
         for d in &self.exclude_disclosures {
-            out.push(format!("excluded: {}", d.label()));
+            out.push(i18n::t_args(
+                "filter-line-excluded",
+                &[("label", d.label().as_str())],
+            ));
         }
         if let Some(sort) = self.sort {
-            out.push(format!("sorted by {}", sort.as_str()));
+            let label = i18n::t(&format!("sort-{}", sort.as_str()));
+            out.push(i18n::t_args(
+                "filter-line-sorted-by",
+                &[("sort", label.as_str())],
+            ));
         }
         out
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hashes {
@@ -899,7 +933,10 @@ pub struct MVersion {
 
 impl MVersion {
     pub fn primary_file(&self) -> Option<&MFile> {
-        self.files.iter().find(|f| f.primary).or_else(|| self.files.first())
+        self.files
+            .iter()
+            .find(|f| f.primary)
+            .or_else(|| self.files.first())
     }
 
     pub fn rank(&self) -> u8 {
@@ -920,13 +957,10 @@ pub struct Resolved {
 }
 
 pub fn resolve_from_project(project: Project, version: MVersion) -> Result<Resolved> {
-    let file = version
-        .primary_file()
-        .cloned()
-        .context(format!(
-            "{} {} has no downloadable file",
-            project.slug, version.version_number
-        ))?;
+    let file = version.primary_file().cloned().context(format!(
+        "{} {} has no downloadable file",
+        project.slug, version.version_number
+    ))?;
     Ok(Resolved {
         project,
         version,
@@ -977,12 +1011,7 @@ impl Modrinth {
         crate::http::Http::from_client(self.http.clone())
     }
 
-    pub async fn download(
-        &self,
-        url: &str,
-        dest: &std::path::Path,
-        label: &str,
-    ) -> Result<u64> {
+    pub async fn download(&self, url: &str, dest: &std::path::Path, label: &str) -> Result<u64> {
         self.client().download(url, dest, label).await
     }
 
@@ -1012,9 +1041,7 @@ impl Modrinth {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok())
                 .map(std::time::Duration::from_secs)
-                .unwrap_or_else(|| {
-                    std::time::Duration::from_millis(500 * u64::from(attempt))
-                });
+                .unwrap_or_else(|| std::time::Duration::from_millis(500 * u64::from(attempt)));
             tokio::time::sleep(wait).await;
         }
     }
@@ -1207,10 +1234,7 @@ impl Modrinth {
             return vec![project.author.clone()];
         }
         match self
-            .get::<Vec<TeamMember>>(&format!(
-                "{}/project/{}/members",
-                self.base, project.id
-            ))
+            .get::<Vec<TeamMember>>(&format!("{}/project/{}/members", self.base, project.id))
             .await
         {
             Ok(members) => members

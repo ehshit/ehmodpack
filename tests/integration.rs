@@ -22,7 +22,11 @@ fn target(minecraft: &str, kind: &str, version: &str) -> LockedTarget {
             kind: kind.to_string(),
             version: version.to_string(),
         },
-        packages: vec![pack("the-stupidest-pack", PkgType::Resourcepack, Some(RpPosition::default()))],
+        packages: vec![pack(
+            "the-stupidest-pack",
+            PkgType::Resourcepack,
+            Some(RpPosition::default()),
+        )],
         external_packs: Vec::new(),
     }
 }
@@ -170,7 +174,10 @@ fn the_packages_schema_covers_every_manifest_field() {
     }
     let ext = &schema["$defs"]["external_pack"]["properties"];
     for key in written["external_packs"][0].as_object().unwrap().keys() {
-        assert!(ext.get(key).is_some(), "the external_pack def is missing {key}");
+        assert!(
+            ext.get(key).is_some(),
+            "the external_pack def is missing {key}"
+        );
     }
 }
 
@@ -211,7 +218,10 @@ fn index_has_the_mrpack_shape() {
     assert_eq!(index["name"], "eh's pack");
     assert_eq!(index["dependencies"]["minecraft"], "1.21.11");
     assert_eq!(index["dependencies"]["fabric-loader"], "0.19.5");
-    assert_eq!(index["files"][0]["path"], "resourcepacks/the-stupidest-pack-1.0.0.zip");
+    assert_eq!(
+        index["files"][0]["path"],
+        "resourcepacks/the-stupidest-pack-1.0.0.zip"
+    );
     assert_eq!(index["files"][0]["env"]["client"], "required");
     assert_eq!(index["files"][0]["env"]["server"], "unsupported");
     assert_eq!(index["files"][0]["fileSize"], 4242);
@@ -231,8 +241,11 @@ fn neoforge_targets_get_a_neoforge_dependency_key() {
 #[test]
 fn every_active_pack_is_kept_now() {
     let mut t = target("1.21.11", "fabric", "0.19.5");
-    t.packages
-        .push(pack("second", PkgType::Resourcepack, Some(RpPosition::Named(RpNamed::Bottom))));
+    t.packages.push(pack(
+        "second",
+        PkgType::Resourcepack,
+        Some(RpPosition::Named(RpNamed::Bottom)),
+    ));
     let names: Vec<String> = t.active_packs().iter().map(|p| p.project.clone()).collect();
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(names.contains(&"the-stupidest-pack".to_string()));
@@ -321,19 +334,22 @@ fn version_lookup_falls_back_to_the_minecraft_key() {
 #[test]
 fn version_lookup_falls_back_to_default_then_star() {
     let mut p = spread_package();
-    p.versions.insert("default".to_string(), "0.3.0".to_string());
+    p.versions
+        .insert("default".to_string(), "0.3.0".to_string());
     assert_eq!(p.version_for("1.20.1", "fabric").as_deref(), Some("0.3.0"));
     p.versions.remove("default");
     p.versions.insert("*".to_string(), "0.2.0".to_string());
-    assert_eq!(p.version_for("1.20.1", "neoforge").as_deref(), Some("0.2.0"));
+    assert_eq!(
+        p.version_for("1.20.1", "neoforge").as_deref(),
+        Some("0.2.0")
+    );
 }
 
 #[test]
 fn a_plain_position_is_read_as_top() {
-    let p: Package = serde_json::from_str(
-        r#"{"type":"resourcepack","project":"icons","position":"top"}"#,
-    )
-    .unwrap();
+    let p: Package =
+        serde_json::from_str(r#"{"type":"resourcepack","project":"icons","position":"top"}"#)
+            .unwrap();
     assert_eq!(p.position, Some(RpPosition::Named(RpNamed::Top)));
 }
 
@@ -355,8 +371,10 @@ fn position_one_is_the_top_of_the_stack() {
 #[test]
 fn position_lookup_prefers_the_exact_target() {
     let mut p = spread_package();
-    p.positions.insert("1.21.11+fabric".to_string(), RpPosition::At(2));
-    p.positions.insert("1.21.8+fabric".to_string(), RpPosition::At(5));
+    p.positions
+        .insert("1.21.11+fabric".to_string(), RpPosition::At(2));
+    p.positions
+        .insert("1.21.8+fabric".to_string(), RpPosition::At(5));
     assert_eq!(p.position_for("1.21.11", "fabric"), Some(RpPosition::At(2)));
     assert_eq!(p.position_for("1.21.8", "fabric"), Some(RpPosition::At(5)));
     assert_eq!(p.position_for("1.20.1", "fabric"), None);
@@ -366,7 +384,8 @@ fn position_lookup_prefers_the_exact_target() {
 fn a_per_target_position_beats_the_plain_one() {
     let mut p = spread_package();
     p.position = Some(RpPosition::At(9));
-    p.positions.insert("1.21.8+fabric".to_string(), RpPosition::At(4));
+    p.positions
+        .insert("1.21.8+fabric".to_string(), RpPosition::At(4));
     assert_eq!(p.position_for("1.21.8", "fabric"), Some(RpPosition::At(4)));
     assert_eq!(p.position_for("1.21.11", "fabric"), Some(RpPosition::At(9)));
 }
@@ -397,7 +416,10 @@ fn a_builtin_pack_goes_in_bare_and_a_file_goes_behind_file() {
     let mut pack = external("fabric", true, Some(RpPosition::At(1)));
     pack.builtin = Some(true);
     assert_eq!(pack.entry(), "fabric");
-    assert_eq!(external("Ginkgo Font.zip", true, None).entry(), "file/Ginkgo Font.zip");
+    assert_eq!(
+        external("Ginkgo Font.zip", true, None).entry(),
+        "file/Ginkgo Font.zip"
+    );
 }
 
 #[test]
@@ -419,7 +441,12 @@ fn the_fabric_marker_is_offered_on_fabric_only() {
 
 #[test]
 fn the_fabric_marker_is_labelled_like_the_game_does() {
-    let label = |l: &str| manifest::builtin_packs_for(l).into_iter().find(|(id, _)| *id == "fabric").map(|(_, n)| n);
+    let label = |l: &str| {
+        manifest::builtin_packs_for(l)
+            .into_iter()
+            .find(|(id, _)| *id == "fabric")
+            .map(|(_, n)| n)
+    };
     assert_eq!(label("fabric"), Some("Fabric Mods"));
     assert_eq!(label("quilt"), None);
 }
@@ -429,7 +456,10 @@ fn a_builtin_can_be_positioned_and_lands_where_asked() {
     let out = inject_ordered(
         "resourcePacks:[\"vanilla\"]\n",
         &[
-            ("file/Icons-Additions-1.2.1.zip".to_string(), Some(RpPosition::At(1))),
+            (
+                "file/Icons-Additions-1.2.1.zip".to_string(),
+                Some(RpPosition::At(1)),
+            ),
             ("fabric".to_string(), Some(RpPosition::At(2))),
         ],
         &[],
@@ -438,8 +468,14 @@ fn a_builtin_can_be_positioned_and_lands_where_asked() {
         .lines()
         .find(|l| l.starts_with("resourcePacks:"))
         .unwrap();
-    assert!(!list.contains("file/fabric"), "no file/ on a built in: {list}");
-    assert!(list.find("\"fabric\"") < list.find("file/Icons-Additions-1.2.1.zip"), "{list}");
+    assert!(
+        !list.contains("file/fabric"),
+        "no file/ on a built in: {list}"
+    );
+    assert!(
+        list.find("\"fabric\"") < list.find("file/Icons-Additions-1.2.1.zip"),
+        "{list}"
+    );
 }
 
 #[test]
@@ -455,7 +491,11 @@ fn an_unpositioned_builtin_is_left_out_entirely() {
 #[test]
 fn a_positioned_builtin_is_not_swallowed_by_the_local_sweep() {
     let before = "resourcePacks:[\"vanilla\",\"fabric\"]\n";
-    let out = inject_ordered(before, &[("fabric".to_string(), Some(RpPosition::At(1)))], &[]);
+    let out = inject_ordered(
+        before,
+        &[("fabric".to_string(), Some(RpPosition::At(1)))],
+        &[],
+    );
     assert!(out.contains("\"fabric\""), "{out}");
     assert_eq!(out.matches("\"fabric\"").count(), 1, "{out}");
 }
@@ -468,7 +508,10 @@ fn an_external_pack_is_read_from_the_bottom_of_the_manifest() -> anyhow::Result<
     assert_eq!(m.external_packs.len(), 1);
     assert_eq!(m.external_packs[0].name, "Ginkgo Font.zip");
     assert!(m.external_packs[0].is_active());
-    assert_eq!(m.external_packs[0].position_for("1.21.9", "fabric"), Some(RpPosition::At(1)));
+    assert_eq!(
+        m.external_packs[0].position_for("1.21.9", "fabric"),
+        Some(RpPosition::At(1))
+    );
     let back = Manifest::parse(&m.to_json())?;
     assert_eq!(back.external_packs[0].name, "Ginkgo Font.zip");
     Ok(())
@@ -520,7 +563,10 @@ fn position_one_ends_up_last_in_the_list() {
 #[test]
 fn bottom_sits_under_everything() {
     let active = vec![
-        ("file/floor.zip".to_string(), Some(RpPosition::Named(RpNamed::Bottom))),
+        (
+            "file/floor.zip".to_string(),
+            Some(RpPosition::Named(RpNamed::Bottom)),
+        ),
         ("file/ceiling.zip".to_string(), Some(RpPosition::At(1))),
     ];
     let out = inject_ordered("resourcePacks:[\"vanilla\"]\n", &active, &[]);
@@ -528,7 +574,10 @@ fn bottom_sits_under_everything() {
         .lines()
         .find(|l| l.starts_with("resourcePacks:"))
         .unwrap();
-    assert!(list.find("file/floor.zip") < list.find("file/ceiling.zip"), "{list}");
+    assert!(
+        list.find("file/floor.zip") < list.find("file/ceiling.zip"),
+        "{list}"
+    );
     assert!(list.find("vanilla") < list.find("file/floor.zip"), "{list}");
 }
 
@@ -544,8 +593,14 @@ fn packs_with_no_position_keep_the_order_they_came_in() {
         .lines()
         .find(|l| l.starts_with("resourcePacks:"))
         .unwrap();
-    assert!(list.find("file/one.zip") < list.find("file/two.zip"), "{list}");
-    assert!(list.find("file/two.zip") < list.find("file/three.zip"), "{list}");
+    assert!(
+        list.find("file/one.zip") < list.find("file/two.zip"),
+        "{list}"
+    );
+    assert!(
+        list.find("file/two.zip") < list.find("file/three.zip"),
+        "{list}"
+    );
 }
 
 #[test]
@@ -555,13 +610,20 @@ fn a_position_beats_a_local_pack_sitting_in_the_way() {
         ("file/Local.zip".to_string(), Some(RpPosition::At(1))),
         ("file/Other.zip".to_string(), Some(RpPosition::At(2))),
     ];
-    let out = inject_ordered(before, &active, &["Local.zip".to_string(), "Other.zip".to_string()]);
+    let out = inject_ordered(
+        before,
+        &active,
+        &["Local.zip".to_string(), "Other.zip".to_string()],
+    );
     let list = out
         .lines()
         .find(|l| l.starts_with("resourcePacks:"))
         .unwrap();
     assert_eq!(list.matches("file/Local.zip").count(), 1, "{list}");
-    assert!(list.find("file/Other.zip") < list.find("file/Local.zip"), "{list}");
+    assert!(
+        list.find("file/Other.zip") < list.find("file/Local.zip"),
+        "{list}"
+    );
 }
 
 #[test]
@@ -583,9 +645,17 @@ fn a_locked_external_pack_joins_the_active_list() {
     ];
     let entries = t.active_entries();
     let names: Vec<&String> = entries.iter().map(|(n, _)| n).collect();
-    assert!(names.contains(&&"file/Ginkgo Font.zip".to_string()), "{names:?}");
+    assert!(
+        names.contains(&&"file/Ginkgo Font.zip".to_string()),
+        "{names:?}"
+    );
     assert!(!names.contains(&&"file/Off.zip".to_string()), "{names:?}");
-    assert!(!names.iter().any(|n| n.ends_with("Off.zip") && n.as_str() != "file/Off.zip"), "{names:?}");
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.ends_with("Off.zip") && n.as_str() != "file/Off.zip"),
+        "{names:?}"
+    );
 }
 
 #[test]
@@ -807,8 +877,13 @@ fn the_index_never_writes_a_java_dependency() {
     let t = target("1.21.11", "fabric", "0.19.5");
     let l = lock(vec![t.clone()]);
     let index = mrpack_index(&l, &t);
-    let deps = index["dependencies"].as_object().expect("dependencies is an object");
-    assert!(deps.get("java").is_none(), "java is not a spec dependency key");
+    let deps = index["dependencies"]
+        .as_object()
+        .expect("dependencies is an object");
+    assert!(
+        deps.get("java").is_none(),
+        "java is not a spec dependency key"
+    );
     for key in deps.keys() {
         assert!(
             manifest::validate_allowed(key),
@@ -865,8 +940,11 @@ fn a_mod_cannot_be_marked_active() {
 #[test]
 fn two_active_packs_are_fine() {
     let mut t = target("1.21.11", "fabric", "0.19.5");
-    t.packages
-        .push(pack("second", PkgType::Resourcepack, Some(RpPosition::Named(RpNamed::Bottom))));
+    t.packages.push(pack(
+        "second",
+        PkgType::Resourcepack,
+        Some(RpPosition::Named(RpNamed::Bottom)),
+    ));
     let l = lock(vec![t]);
     let pack = Manifest::parse("{\"name\":\"x\",\"packages\":[]}").unwrap();
     let report = manifest::validate_report(&l, &pack);
@@ -896,10 +974,18 @@ fn a_loader_key_the_spec_rejects_is_caught() {
 fn active_packs_become_file_entries_in_options() {
     let out = inject_active(
         "resourcePacks:[\"vanilla\"]\n",
-        &["Icons v.1.13.4.zip".to_string(), "Ginkgo Font.zip".to_string()],
+        &[
+            "Icons v.1.13.4.zip".to_string(),
+            "Ginkgo Font.zip".to_string(),
+        ],
         &[],
     );
-    assert!(out.contains("resourcePacks:[\"vanilla\",\"file/Icons v.1.13.4.zip\",\"file/Ginkgo Font.zip\"]"), "{out}");
+    assert!(
+        out.contains(
+            "resourcePacks:[\"vanilla\",\"file/Icons v.1.13.4.zip\",\"file/Ginkgo Font.zip\"]"
+        ),
+        "{out}"
+    );
     assert!(!out.contains("fabric-resource-pack-v0"));
 }
 
@@ -907,7 +993,10 @@ fn active_packs_become_file_entries_in_options() {
 fn only_the_active_packs_survive_in_options() {
     let before = "resourcePacks:[\"vanilla\",\"file/NotActive.zip\",\"file/AlsoNot.zip\"]\n";
     let out = inject_active(before, &["Wanted.zip".to_string()], &[]);
-    assert!(out.contains("resourcePacks:[\"vanilla\",\"file/Wanted.zip\"]"), "{out}");
+    assert!(
+        out.contains("resourcePacks:[\"vanilla\",\"file/Wanted.zip\"]"),
+        "{out}"
+    );
     assert!(!out.contains("NotActive"));
 }
 
@@ -928,10 +1017,17 @@ fn client_overrides_land_in_the_overrides_folder() -> anyhow::Result<()> {
     fs::create_dir_all(root.join("overrides"))?;
     fs::create_dir_all(root.join("client-overrides"))?;
     fs::write(root.join("overrides/base.txt"), "base")?;
-    fs::write(root.join("client-overrides/options.txt"), "resourcePacks:[\"vanilla\"]\n")?;
+    fs::write(
+        root.join("client-overrides/options.txt"),
+        "resourcePacks:[\"vanilla\"]\n",
+    )?;
 
     let mut t = target("1.21.11", "fabric", "0.19.5");
-    t.packages = vec![pack("Icons v.1.13.4.zip", PkgType::Resourcepack, Some(RpPosition::default()))];
+    t.packages = vec![pack(
+        "Icons v.1.13.4.zip",
+        PkgType::Resourcepack,
+        Some(RpPosition::default()),
+    )];
     let l = lock(vec![t.clone()]);
     let out = build(
         &l,
@@ -939,7 +1035,10 @@ fn client_overrides_land_in_the_overrides_folder() -> anyhow::Result<()> {
         &root.join("dist"),
         &[
             ("overrides".to_string(), root.join("overrides")),
-            ("client-overrides".to_string(), root.join("client-overrides")),
+            (
+                "client-overrides".to_string(),
+                root.join("client-overrides"),
+            ),
         ],
     )?;
     let file = fs::File::open(&out)?;
@@ -947,8 +1046,14 @@ fn client_overrides_land_in_the_overrides_folder() -> anyhow::Result<()> {
     let names: Vec<String> = (0..archive.len())
         .map(|i| archive.by_index(i).unwrap().name().to_string())
         .collect();
-    assert!(names.contains(&"overrides/base.txt".to_string()), "{names:?}");
-    assert!(names.contains(&"overrides/options.txt".to_string()), "{names:?}");
+    assert!(
+        names.contains(&"overrides/base.txt".to_string()),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&"overrides/options.txt".to_string()),
+        "{names:?}"
+    );
     assert!(
         !names.iter().any(|n| n.starts_with("client-overrides")),
         "there should be no client-overrides folder in the archive: {names:?}"
@@ -964,11 +1069,18 @@ fn client_overrides_land_in_the_overrides_folder() -> anyhow::Result<()> {
 
 #[test]
 fn a_pack_we_do_not_manage_is_left_alone() {
-    let before = "resourcePacks:[\"vanilla\",\"file/Local Icons.zip\",\"file/Old Modrinth Pack.zip\"]\n";
+    let before =
+        "resourcePacks:[\"vanilla\",\"file/Local Icons.zip\",\"file/Old Modrinth Pack.zip\"]\n";
     let local = vec!["Local Icons.zip".to_string()];
     let out = inject_active(before, &["New Modrinth Pack.zip".to_string()], &local);
-    assert!(out.contains("\"file/Local Icons.zip\""), "local pack dropped: {out}");
-    assert!(!out.contains("Old Modrinth Pack"), "stale entry kept: {out}");
+    assert!(
+        out.contains("\"file/Local Icons.zip\""),
+        "local pack dropped: {out}"
+    );
+    assert!(
+        !out.contains("Old Modrinth Pack"),
+        "stale entry kept: {out}"
+    );
     assert!(out.contains("\"file/New Modrinth Pack.zip\""), "{out}");
 }
 
@@ -981,11 +1093,18 @@ fn an_entry_with_nothing_on_disk_is_dropped() {
 
 #[test]
 fn the_options_list_follows_the_current_filename() {
-    let first = inject_active("resourcePacks:[\"vanilla\"]\n", &["Icons-1.0.zip".to_string()], &[]);
+    let first = inject_active(
+        "resourcePacks:[\"vanilla\"]\n",
+        &["Icons-1.0.zip".to_string()],
+        &[],
+    );
     assert!(first.contains("file/Icons-1.0.zip"));
     let second = inject_active(&first, &["Icons-2.0.zip".to_string()], &[]);
     assert!(second.contains("file/Icons-2.0.zip"), "{second}");
-    assert!(!second.contains("Icons-1.0"), "the old filename lingered: {second}");
+    assert!(
+        !second.contains("Icons-1.0"),
+        "the old filename lingered: {second}"
+    );
     assert_eq!(second.matches("Icons").count(), 1, "{second}");
 }
 
@@ -1112,7 +1231,9 @@ fn importer_skips_configs_unless_asked() -> anyhow::Result<()> {
     let written = importer::extract_overrides(&path, dir.path(), false, &mut out)?;
     assert_eq!(written, 1, "only options.txt without the config");
     assert!(
-        !dir.path().join("overrides/config/sodium/mixins.sodium.json").exists(),
+        !dir.path()
+            .join("overrides/config/sodium/mixins.sodium.json")
+            .exists(),
         "configs should be left out"
     );
     assert!(dir.path().join("client-overrides/options.txt").exists());
@@ -1120,7 +1241,11 @@ fn importer_skips_configs_unless_asked() -> anyhow::Result<()> {
     let mut out = Vec::new();
     let written = importer::extract_overrides(&path, dir.path(), true, &mut out)?;
     assert_eq!(written, 2, "options.txt plus the config");
-    assert!(dir.path().join("overrides/config/sodium/mixins.sodium.json").exists());
+    assert!(
+        dir.path()
+            .join("overrides/config/sodium/mixins.sodium.json")
+            .exists()
+    );
     Ok(())
 }
 
@@ -1374,7 +1499,12 @@ async fn resolve_outside_steps_away_from_a_break_range() -> anyhow::Result<()> {
         .await?;
     assert_eq!(got.version.version_number, "1.0.0");
     let err = client
-        .resolve_outside("iris", Some("1.21.11"), &["fabric".to_string()], "[0.0.0,9.9.9]")
+        .resolve_outside(
+            "iris",
+            Some("1.21.11"),
+            &["fabric".to_string()],
+            "[0.0.0,9.9.9]",
+        )
         .await
         .unwrap_err()
         .to_string();
@@ -1421,17 +1551,19 @@ async fn batch_lookups_return_what_was_asked_for() -> anyhow::Result<()> {
     let server = mock_modrinth().await;
     Mock::given(method("GET"))
         .and(path("/versions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
-            "id": "ver-release",
-            "project_id": "AANobbMI",
-            "name": "Sodium 0.6.0",
-            "version_number": "0.6.0",
-            "version_type": "release",
-            "date_published": "2026-01-01T00:00:00Z",
-            "game_versions": ["1.21.11"],
-            "loaders": ["fabric"],
-            "files": []
-        }])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "id": "ver-release",
+                "project_id": "AANobbMI",
+                "name": "Sodium 0.6.0",
+                "version_number": "0.6.0",
+                "version_type": "release",
+                "date_published": "2026-01-01T00:00:00Z",
+                "game_versions": ["1.21.11"],
+                "loaders": ["fabric"],
+                "files": []
+            }])),
+        )
         .mount(&server)
         .await;
     let client = Modrinth::new(server.uri())?;
@@ -1450,6 +1582,9 @@ async fn live_smoke_resolves_a_real_project() -> anyhow::Result<()> {
     let r = client
         .resolve("sodium", Some("1.21.11"), &["fabric".to_string()])
         .await?;
-    println!("{} {} -> {}", r.project.slug, r.version.version_number, r.file.filename);
+    println!(
+        "{} {} -> {}",
+        r.project.slug, r.version.version_number, r.file.filename
+    );
     Ok(())
 }

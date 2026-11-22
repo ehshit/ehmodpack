@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::loaders::{java_for, LoaderKind};
+use crate::loaders::{LoaderKind, java_for};
 
 pub const MANIFEST_FILE: &str = "packages.json";
 pub const SOFTWARES_FILE: &str = "softwares.json";
@@ -205,8 +205,8 @@ pub fn pick<'a, T: Targetish>(
             Some(want) => {
                 let have = t.minecraft();
                 let exact = have == want;
-                let prefix = have.starts_with(want)
-                    && want.matches('.').count() < have.matches('.').count();
+                let prefix =
+                    have.starts_with(want) && want.matches('.').count() < have.matches('.').count();
                 exact || prefix
             }
             None => true,
@@ -220,7 +220,11 @@ pub fn pick<'a, T: Targetish>(
         1 => Ok(hits[0]),
         0 => bail!(
             "no target matches {want}, have {}",
-            items.iter().map(Targetish::label).collect::<Vec<_>>().join(", ")
+            items
+                .iter()
+                .map(Targetish::label)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         _ => bail!(
             "{want} is ambiguous, pick one of {}",
@@ -431,7 +435,11 @@ pub struct Manifest {
     pub server_overrides: String,
     #[serde(default)]
     pub packages: Vec<Package>,
-    #[serde(rename = "external_packs", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "external_packs",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub external_packs: Vec<ExternalPack>,
 }
 
@@ -500,11 +508,11 @@ pub fn write_local_schemas(dir: &Path) -> Result<Vec<PathBuf>> {
 
 impl Manifest {
     pub fn parse(text: &str) -> Result<Self> {
-        let value = jsonc_parser::parse_to_serde_value(text, &jsonc_parser::ParseOptions::default())
-            .map_err(|e| anyhow::anyhow!("{MANIFEST_FILE}: {e}"))?
-            .ok_or_else(|| anyhow::anyhow!("{MANIFEST_FILE} is empty"))?;
-        serde_json::from_value(value)
-            .with_context(|| format!("could not parse {MANIFEST_FILE}"))
+        let value =
+            jsonc_parser::parse_to_serde_value(text, &jsonc_parser::ParseOptions::default())
+                .map_err(|e| anyhow::anyhow!("{MANIFEST_FILE}: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("{MANIFEST_FILE} is empty"))?;
+        serde_json::from_value(value).with_context(|| format!("could not parse {MANIFEST_FILE}"))
     }
 
     pub fn load(dir: &Path) -> Result<Self> {

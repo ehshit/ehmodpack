@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub const FABRIC_META: &str = "https://meta.fabricmc.net/v2";
@@ -29,10 +29,7 @@ impl LoaderKind {
 
     pub fn parse(text: &str) -> Option<Self> {
         let want = text.trim().to_ascii_lowercase();
-        Self::all()
-            .iter()
-            .copied()
-            .find(|k| k.as_str() == want)
+        Self::all().iter().copied().find(|k| k.as_str() == want)
     }
 
     fn base(self) -> &'static str {
@@ -105,8 +102,7 @@ pub fn newest(infos: &[LoaderInfo]) -> Option<String> {
             best = Some(info);
         }
     }
-    best.or_else(|| infos.first())
-        .map(|i| i.version.clone())
+    best.or_else(|| infos.first()).map(|i| i.version.clone())
 }
 
 pub async fn resolve(kind: LoaderKind, mc: &str) -> Result<String> {
@@ -166,7 +162,8 @@ async fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T> {
     if !status.is_success() {
         bail!("GET {url} returned an error");
     }
-    serde_json::from_slice(&body).with_context(|| format!("could not decode the response from {url}"))
+    serde_json::from_slice(&body)
+        .with_context(|| format!("could not decode the response from {url}"))
 }
 
 async fn get_text(url: &str) -> Result<String> {
@@ -222,10 +219,22 @@ mod tests {
     #[test]
     fn picks_the_highest_stable_not_the_highest_build() {
         let entries = vec![
-            LoaderInfo { build: 5, ..info("0.19.5", true) },
-            LoaderInfo { build: 4, ..info("0.19.4", false) },
-            LoaderInfo { build: 0, ..info("0.19.0", false) },
-            LoaderInfo { build: 6, ..info("0.18.6", false) },
+            LoaderInfo {
+                build: 5,
+                ..info("0.19.5", true)
+            },
+            LoaderInfo {
+                build: 4,
+                ..info("0.19.4", false)
+            },
+            LoaderInfo {
+                build: 0,
+                ..info("0.19.0", false)
+            },
+            LoaderInfo {
+                build: 6,
+                ..info("0.18.6", false)
+            },
         ];
         assert_eq!(newest(&entries).as_deref(), Some("0.19.5"));
     }
@@ -296,7 +305,7 @@ mod tests {
     }
 
     fn parse_maven_versions(xml: &str, mc: &str) -> Vec<String> {
-    let prefix = format!("{}.", mc.strip_prefix("1.").unwrap_or(mc));
+        let prefix = format!("{}.", mc.strip_prefix("1.").unwrap_or(mc));
         xml.split("<version>")
             .skip(1)
             .filter_map(|chunk| chunk.split("</version>").next())

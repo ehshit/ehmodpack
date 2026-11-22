@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha512};
 
 use crate::build::{inject_ordered, packs_on_disk};
+use crate::i18n;
 use crate::lock::LockedTarget;
 use crate::modrinth::Modrinth;
 
@@ -43,20 +44,40 @@ pub fn dir_name(pack: &str, target: &LockedTarget) -> String {
 pub fn fresh_dir(pack: &str, target: &LockedTarget) -> Result<PathBuf> {
     let dir = temp_root().join(dir_name(pack, target));
     if dir.exists() {
-        fs::remove_dir_all(&dir)
-            .with_context(|| format!("could not clear {}", dir.display()))?;
+        fs::remove_dir_all(&dir).with_context(|| {
+            i18n::t_args(
+                "staging-clear-failed",
+                &[("path", &dir.display().to_string())],
+            )
+        })?;
     }
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("could not create {}", dir.display()))?;
+    fs::create_dir_all(&dir).with_context(|| {
+        i18n::t_args(
+            "staging-create-failed",
+            &[("path", &dir.display().to_string())],
+        )
+    })?;
     Ok(dir)
 }
 
 pub fn wipe(dir: &Path) -> Result<()> {
     if dir.exists() {
-        fs::remove_dir_all(dir)
-            .with_context(|| format!("could not delete {}", dir.display()))?;
+        fs::remove_dir_all(dir).with_context(|| {
+            i18n::t_args(
+                "staging-delete-failed",
+                &[("path", &dir.display().to_string())],
+            )
+        })?;
     }
     Ok(())
+}
+
+pub fn discard(dir: &Path, keep: bool) -> Result<bool> {
+    if keep {
+        return Ok(false);
+    }
+    wipe(dir)?;
+    Ok(true)
 }
 
 pub fn copy_overrides(sources: &[(String, PathBuf)], dest: &Path) -> Result<usize> {
@@ -70,9 +91,12 @@ pub fn copy_overrides(sources: &[(String, PathBuf)], dest: &Path) -> Result<usiz
         }
         let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {
-            for entry in fs::read_dir(&dir)
-                .with_context(|| format!("could not read {}", dir.display()))?
-            {
+            for entry in fs::read_dir(&dir).with_context(|| {
+                i18n::t_args(
+                    "staging-read-failed",
+                    &[("path", &dir.display().to_string())],
+                )
+            })? {
                 let path = entry?.path();
                 if path.is_dir() {
                     stack.push(path);
@@ -88,7 +112,13 @@ pub fn copy_overrides(sources: &[(String, PathBuf)], dest: &Path) -> Result<usiz
                     fs::create_dir_all(parent)?;
                 }
                 fs::copy(&path, &target).with_context(|| {
-                    format!("could not copy {} to {}", path.display(), target.display())
+                    i18n::t_args(
+                        "staging-copy-failed",
+                        &[
+                            ("from", &path.display().to_string()),
+                            ("to", &target.display().to_string()),
+                        ],
+                    )
                 })?;
                 copied += 1;
             }
@@ -112,18 +142,32 @@ where
     for pkg in &target.packages {
         let out = dest.join(&pkg.path);
         if let Some(parent) = out.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("could not create {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                i18n::t_args(
+                    "staging-create-failed",
+                    &[("path", &parent.display().to_string())],
+                )
+            })?;
         }
-        let url = pkg
-            .downloads
-            .first()
-            .with_context(|| format!("{} has no download url", pkg.project))?;
+        let url = pkg.downloads.first().with_context(|| {
+            i18n::t_args("staging-no-download-url", &[("project", &pkg.project)])
+        })?;
         let written = client
-            .download(url, &out, &format!("fetching {}", pkg.path))
+            .download(
+                url,
+                &out,
+                &i18n::t_args("staging-fetching", &[("path", &pkg.path)]),
+            )
             .await
-            .with_context(|| format!("could not download {}", pkg.project))?;
-        let body = std::fs::read(&out).with_context(|| format!("could not read {}", out.display()))?;
+            .with_context(|| {
+                i18n::t_args("staging-download-failed", &[("project", &pkg.project)])
+            })?;
+        let body = std::fs::read(&out).with_context(|| {
+            i18n::t_args(
+                "staging-read-failed",
+                &[("path", &out.display().to_string())],
+            )
+        })?;
         bytes += written;
         if !pkg.hashes.sha512.is_empty() {
             check_sha512(&pkg.project, &body, &pkg.hashes.sha512)?;
@@ -132,22 +176,35 @@ where
         if !pkg.hashes.sha1.is_empty() {
             let got = crate::build::sha1_of_bytes(&body).unwrap_or_default();
             if got != pkg.hashes.sha1 {
-                anyhow::bail!("{} did not match its sha1", pkg.project);
+                anyhow::bail!(
+                    "{}",
+                    i18n::t_args("staging-sha1-mismatch", &[("project", &pkg.project)])
+                );
             }
             shas += 1;
         }
-        log(&format!("fetched {}", pkg.project));
+        log(&i18n::t_args(
+            "staging-fetched",
+            &[("project", &pkg.project)],
+        ));
         downloaded += 1;
     }
     let options = dest.join("options.txt");
     if options.exists() {
         let active = target.active_entries();
         if !active.is_empty() {
-            let text = fs::read_to_string(&options)
-                .with_context(|| format!("could not read {}", options.display()))?;
+            let text = fs::read_to_string(&options).with_context(|| {
+                i18n::t_args(
+                    "staging-read-failed",
+                    &[("path", &options.display().to_string())],
+                )
+            })?;
             let local = packs_on_disk(&[("staged".to_string(), dest.to_path_buf())]);
             fs::write(&options, inject_ordered(&text, &active, &local))?;
-            log(&format!("switched on {} resource packs", active.len()));
+            log(&i18n::t_args(
+                "staging-packs-switched",
+                &[("count", &active.len().to_string())],
+            ));
         }
     }
     Ok(Staged {
@@ -158,10 +215,7 @@ where
     })
 }
 
-pub fn scan_conflicts(
-    dir: &Path,
-    target: &crate::modmeta::Target,
-) -> crate::modmeta::Report {
+pub fn scan_conflicts(dir: &Path, target: &crate::modmeta::Target) -> crate::modmeta::Report {
     let mut metas: Vec<crate::modmeta::ModMeta> = Vec::new();
     for folder in ["mods", "resourcepacks", "shaderpacks"] {
         let Ok(entries) = fs::read_dir(dir.join(folder)) else {
@@ -188,13 +242,25 @@ pub fn verify(_project: &str, body: &[u8], sha1: &str, sha512: &str) -> Result<(
         hasher.update(body);
         let got = format!("{:x}", hasher.finalize());
         if got != sha512 {
-            anyhow::bail!("sha512 does not match. got {got}, wanted {sha512}");
+            anyhow::bail!(
+                "{}",
+                i18n::t_args(
+                    "staging-sha512-hash-mismatch",
+                    &[("got", &got), ("wanted", sha512)],
+                )
+            );
         }
     }
     if !sha1.is_empty() {
         let got = crate::build::sha1_of_bytes(body).unwrap_or_default();
         if got != sha1 {
-            anyhow::bail!("sha1 does not match. got {got}, wanted {sha1}");
+            anyhow::bail!(
+                "{}",
+                i18n::t_args(
+                    "staging-sha1-hash-mismatch",
+                    &[("got", &got), ("wanted", sha1)],
+                )
+            );
         }
     }
     Ok(())
@@ -209,7 +275,11 @@ pub fn check_sha512(project: &str, body: &[u8], want: &str) -> Result<()> {
     let got = format!("{:x}", hasher.finalize());
     if got != want {
         anyhow::bail!(
-            "{project} did not match its sha512, the download is corrupt. got {got}, wanted {want}"
+            "{}",
+            i18n::t_args(
+                "staging-sha512-mismatch",
+                &[("project", project), ("got", &got), ("wanted", want),],
+            )
         );
     }
     Ok(())
@@ -235,5 +305,34 @@ pub fn human(bytes: u64) -> String {
         format!("{bytes} B")
     } else {
         format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = temp_root().join(format!("test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn discard_removes_the_staging_dir() {
+        let dir = scratch("discard");
+        fs::write(dir.join("thing.txt"), b"meow").unwrap();
+        assert!(discard(&dir, false).unwrap());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn discard_keeps_the_staging_dir_when_asked() {
+        let dir = scratch("keep");
+        fs::write(dir.join("thing.txt"), b"meow").unwrap();
+        assert!(!discard(&dir, true).unwrap());
+        assert!(dir.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

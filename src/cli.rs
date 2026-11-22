@@ -215,7 +215,21 @@ pub enum Cmd {
         #[arg(long, short = 'l')]
         loader: Option<LoaderKind>,
     },
+    Locale {
+        #[command(subcommand)]
+        action: LocaleAction,
+    },
     Validate,
+    Account {
+        #[arg(long)]
+        login: bool,
+        #[arg(long)]
+        logout: bool,
+        #[arg(long)]
+        show: bool,
+        #[arg(long)]
+        client_id: Option<String>,
+    },
     Java,
     SetRelease {
         version: String,
@@ -242,7 +256,19 @@ pub enum Cmd {
         vendor: Option<String>,
         #[arg(long, value_parser = ["yes", "no"])]
         java_path: Option<String>,
+        #[arg(long)]
+        msa: bool,
+        #[arg(long)]
+        msa_login: bool,
+        #[arg(long)]
+        client_id: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LocaleAction {
+    List,
+    Set { locale: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]

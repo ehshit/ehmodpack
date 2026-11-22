@@ -117,8 +117,8 @@ pub fn read_bytes(body: &[u8]) -> Result<Option<ModMeta>> {
 }
 
 pub fn read(jar: &Path) -> Result<Option<ModMeta>> {
-    let file = std::fs::File::open(jar)
-        .with_context(|| format!("could not open {}", jar.display()))?;
+    let file =
+        std::fs::File::open(jar).with_context(|| format!("could not open {}", jar.display()))?;
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("{} is not a readable jar", jar.display()))?;
     for name in [
@@ -255,15 +255,13 @@ pub fn satisfied(range: &str, found: &str) -> bool {
         return true;
     }
 
-    parts
-        .iter()
-        .all(|c| {
-            if let Some(rest) = c.strip_prefix('~') {
-                return tilde_ok(&found, rest.trim());
-            }
-            let (op, edge) = split_op(c);
-            bound_ok(&found, op, edge)
-        })
+    parts.iter().all(|c| {
+        if let Some(rest) = c.strip_prefix('~') {
+            return tilde_ok(&found, rest.trim());
+        }
+        let (op, edge) = split_op(c);
+        bound_ok(&found, op, edge)
+    })
 }
 
 fn tilde_ok(found: &str, edge: &str) -> bool {
@@ -347,9 +345,7 @@ fn version_tuple(text: &str) -> Vec<u64> {
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
-    core.split('.')
-        .map(|p| p.parse().unwrap_or(0))
-        .collect()
+    core.split('.').map(|p| p.parse().unwrap_or(0)).collect()
 }
 
 fn wildcard_prefix(edge: &str) -> Option<Vec<u64>> {
@@ -428,7 +424,9 @@ pub struct Report {
 pub fn check(metas: &[ModMeta], target: &Target) -> Report {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-    let has_fabric_api = metas.iter().any(|m| m.id.eq_ignore_ascii_case("fabric-api"));
+    let has_fabric_api = metas
+        .iter()
+        .any(|m| m.id.eq_ignore_ascii_case("fabric-api"));
 
     for meta in metas {
         if meta.id.is_empty() {
@@ -716,10 +714,7 @@ mod tests {
             range: "<0.8.0".to_string(),
             required: true,
         });
-        let found = check(
-            &[sodium, meta("sodium-extra", "0.7.9")],
-            &target(),
-        );
+        let found = check(&[sodium, meta("sodium-extra", "0.7.9")], &target());
         assert!(found.errors.is_empty(), "{:?}", found.errors);
         assert_eq!(found.warnings.len(), 1);
     }

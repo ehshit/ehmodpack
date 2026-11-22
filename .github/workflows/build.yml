@@ -67,6 +67,8 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/apt-archives"
       - name: Build
         shell: pwsh
+        env:
+          EHMODPACK_MSA_CLIENT_ID: ${{ secrets.EHMODPACK_MSA_CLIENT_ID }}
         run: |
           if ("${{ runner.os }}" -eq "Windows") {
             chcp 65001 > $null

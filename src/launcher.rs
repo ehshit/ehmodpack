@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use serde_json::json;
 
@@ -30,9 +30,7 @@ where
 {
     match target.loader.kind.as_str() {
         "fabric" => fabric(http, base, target, &mut log).await,
-        other => bail!(
-            "It only wires fabric up so far, {other} is not there yet sorry"
-        ),
+        other => bail!("It only wires fabric up so far, {other} is not there yet sorry"),
     }
 }
 
@@ -194,12 +192,7 @@ pub fn maven_url(maven: &str) -> String {
     format!("{FABRIC_MAVEN}/{path}", path = maven_path(maven))
 }
 
-async fn fetch_maven<F>(
-    http: &Http,
-    base: &Path,
-    maven: &str,
-    log: &mut F,
-) -> Result<PathBuf>
+async fn fetch_maven<F>(http: &Http, base: &Path, maven: &str, log: &mut F) -> Result<PathBuf>
 where
     F: FnMut(&str),
 {

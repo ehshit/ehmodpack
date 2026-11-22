@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::i18n;
 use crate::lock::Lock;
 use crate::manifest::{Manifest, PkgType, Support, Targetish};
 
@@ -52,40 +53,45 @@ impl Report {
     }
 }
 
-pub fn check(
-    lock: &Lock,
-    manifest: &Manifest,
-    sources: &[(String, std::path::PathBuf)],
-) -> Report {
+pub fn check(lock: &Lock, manifest: &Manifest, sources: &[(String, std::path::PathBuf)]) -> Report {
     let mut r = Report::new();
 
     if lock.name.trim().is_empty() {
-        r.error("the pack has no name".to_string());
+        r.error(i18n::t("validate-pack-no-name"));
     }
     if lock.version.trim().is_empty() {
-        r.error("the pack has no version, versionId would be empty".to_string());
+        r.error(i18n::t("validate-pack-no-version"));
     }
     if lock.targets.is_empty() {
-        r.error("there are no targets to build for".to_string());
+        r.error(i18n::t("validate-no-targets"));
         return r;
     }
 
     for target in &lock.targets {
         let label = target.label();
         if target.minecraft.trim().is_empty() {
-            r.error(format!("{label} has no minecraft version"));
+            r.error(i18n::t_args(
+                "validate-target-no-minecraft",
+                &[("label", &label)],
+            ));
         }
         if !allowed_dependency(&loader_key(&target.loader.kind)) {
-            r.error(format!(
-                "{label} uses loader {}, which is not one the modpack spec allows",
-                target.loader.kind
+            r.error(i18n::t_args(
+                "validate-loader-not-allowed",
+                &[("label", &label), ("loader", &target.loader.kind)],
             ));
         }
         if target.loader.version.trim().is_empty() {
-            r.error(format!("{label} has no loader version"));
+            r.error(i18n::t_args(
+                "validate-target-no-loader-version",
+                &[("label", &label)],
+            ));
         }
         if target.packages.is_empty() {
-            r.warn(format!("{label} has no packages at all"));
+            r.warn(i18n::t_args(
+                "validate-target-no-packages",
+                &[("label", &label)],
+            ));
         }
 
         let mut paths: BTreeSet<&str> = BTreeSet::new();
@@ -97,55 +103,85 @@ pub fn check(
                 pkg.project.as_str()
             };
             if pkg.downloads.is_empty() {
-                r.error(format!("{label}: {name} has no download url"));
+                r.error(i18n::t_args(
+                    "validate-no-download-url",
+                    &[("label", &label), ("name", name)],
+                ));
             } else if !pkg.downloads[0].starts_with("https://") {
-                r.error(format!(
-                    "{label}: {name} has a non https download url ({})",
-                    pkg.downloads[0]
+                r.error(i18n::t_args(
+                    "validate-non-https-url",
+                    &[
+                        ("label", &label),
+                        ("name", name),
+                        ("url", &pkg.downloads[0]),
+                    ],
                 ));
             }
             if pkg.hashes.sha512.is_empty() {
-                r.error(format!("{label}: {name} has no sha512, a launcher cannot verify it"));
+                r.error(i18n::t_args(
+                    "validate-no-sha512",
+                    &[("label", &label), ("name", name)],
+                ));
             }
             if pkg.hashes.sha1.is_empty() {
-                r.warn(format!("{label}: {name} has no sha1"));
+                r.warn(i18n::t_args(
+                    "validate-no-sha1",
+                    &[("label", &label), ("name", name)],
+                ));
             }
             if pkg.file_size == 0 {
-                r.warn(format!("{label}: {name} has a file size of 0"));
+                r.warn(i18n::t_args(
+                    "validate-zero-size",
+                    &[("label", &label), ("name", name)],
+                ));
             }
             if pkg.path.is_empty() {
-                r.error(format!("{label}: {name} has no path in the pack"));
+                r.error(i18n::t_args(
+                    "validate-no-path",
+                    &[("label", &label), ("name", name)],
+                ));
             } else {
                 if pkg.path.contains("..") || pkg.path.starts_with('/') {
-                    r.error(format!("{label}: {} escapes the pack", pkg.path));
+                    r.error(i18n::t_args(
+                        "validate-escapes-pack",
+                        &[("label", &label), ("path", &pkg.path)],
+                    ));
                 }
                 if !paths.insert(pkg.path.as_str()) {
-                    r.error(format!("{label}: two packages share the path {}", pkg.path));
+                    r.error(i18n::t_args(
+                        "validate-duplicate-path",
+                        &[("label", &label), ("path", &pkg.path)],
+                    ));
                 }
             }
             if pkg.kind == PkgType::Mod && !pkg.path.starts_with("mods/") {
-                r.warn(format!(
-                    "{label}: {name} is a mod but lands in {}",
-                    pkg.path
+                r.warn(i18n::t_args(
+                    "validate-mod-wrong-folder",
+                    &[("label", &label), ("name", name), ("path", &pkg.path)],
                 ));
             }
             if pkg.position.is_some() {
                 if pkg.env.client != Support::Required {
-                    r.error(format!(
-                        "{label}: {name} is active but is not marked client required, so a launcher will not install it and options.txt would point at nothing"
+                    r.error(i18n::t_args(
+                        "validate-active-not-client-required",
+                        &[("label", &label), ("name", name)],
                     ));
                 }
-                if !pkg.path.starts_with("resourcepacks/") && !pkg.path.starts_with("shaderpacks/") {
-                    r.error(format!(
-                        "{label}: {name} is active but lands in {}, it needs to be a resourcepack or shader",
-                        pkg.path
+                if !pkg.path.starts_with("resourcepacks/") && !pkg.path.starts_with("shaderpacks/")
+                {
+                    r.error(i18n::t_args(
+                        "validate-active-wrong-folder",
+                        &[("label", &label), ("name", name), ("path", &pkg.path)],
                     ));
                 }
                 actives.push(name);
             }
         }
         if actives.is_empty() && crate::build::pack_paths_on_disk(sources).is_empty() {
-            r.warn(format!("{label} has no active resource pack"));
+            r.warn(i18n::t_args(
+                "validate-no-active-resource-pack",
+                &[("label", &label)],
+            ));
         }
     }
 
@@ -153,65 +189,74 @@ pub fn check(
     let mut seen: BTreeSet<&String> = BTreeSet::new();
     for l in &labels {
         if !seen.insert(l) {
-            r.error(format!("{l} is listed twice in the lockfile"));
+            r.error(i18n::t_args("validate-duplicate-target", &[("label", l)]));
         }
     }
 
     for pkg in &manifest.packages {
         if pkg.project.is_none() && pkg.id.is_none() {
-            r.error("a package has neither project nor id".to_string());
+            r.error(i18n::t("validate-package-no-project-or-id"));
         }
         if pkg.version.is_some() && !pkg.versions.is_empty() {
-            r.warn(format!(
-                "{} has both version and versions, version wins",
-                pkg.key()
+            r.warn(i18n::t_args(
+                "validate-version-and-versions",
+                &[("key", &pkg.key())],
             ));
         }
         for key in pkg.versions.keys() {
             if key != "default" && key != "*" && !key.contains('+') && !key.starts_with('1') {
-                r.warn(format!("{} has an odd versions key {key:?}", pkg.key()));
+                r.warn(i18n::t_args(
+                    "validate-odd-versions-key",
+                    &[("key", &pkg.key()), ("value", key)],
+                ));
             }
         }
         for key in &pkg.skip {
             let mc = key.split('+').next().unwrap_or(key);
             if key != "*" && key != "default" && !mc.starts_with('1') {
-                r.warn(format!("{} has an odd skip key {key:?}", pkg.key()));
+                r.warn(i18n::t_args(
+                    "validate-odd-skip-key",
+                    &[("key", &pkg.key()), ("value", key)],
+                ));
             }
         }
         if pkg.position.is_some() && !pkg.positions.is_empty() {
-            r.warn(format!(
-                "{} has both position and positions, the per target one wins",
-                pkg.key()
+            r.warn(i18n::t_args(
+                "validate-position-and-positions",
+                &[("key", &pkg.key())],
             ));
         }
         for key in pkg.positions.keys() {
             let mc = key.split('+').next().unwrap_or(key);
             if key != "default" && key != "*" && !mc.starts_with('1') {
-                r.warn(format!("{} has an odd positions key {key:?}", pkg.key()));
+                r.warn(i18n::t_args(
+                    "validate-odd-positions-key",
+                    &[("key", &pkg.key()), ("value", key)],
+                ));
             }
         }
     }
 
     for pack in &manifest.external_packs {
         if pack.name.trim().is_empty() {
-            r.error("an external pack has no name".to_string());
+            r.error(i18n::t("validate-external-no-name"));
         }
         if pack.is_builtin() && pack.name.contains('/') {
-            r.error(format!(
-                "{} is marked builtin but looks like a file path",
-                pack.name
+            r.error(i18n::t_args(
+                "validate-external-builtin-path",
+                &[("name", &pack.name)],
             ));
         }
         if pack.position.is_some() && !pack.positions.is_empty() {
-            r.warn(format!(
-                "{} has both position and positions, the per target one wins",
-                pack.name
+            r.warn(i18n::t_args(
+                "validate-position-and-positions",
+                &[("key", &pack.name)],
             ));
         }
     }
 
     if manifest.packages.is_empty() {
-        r.warn("the pack has no packages at all".to_string());
+        r.warn(i18n::t("validate-pack-no-packages"));
     }
 
     r
@@ -242,17 +287,26 @@ pub fn check_sources(sources: &[(String, std::path::PathBuf)]) -> Report {
                     .to_string_lossy()
                     .replace('\\', "/");
                 if rel.contains("..") || rel.starts_with('/') || rel.contains(':') {
-                    r.error(format!("{name}: {} would escape the pack", rel));
+                    r.error(i18n::t_args(
+                        "validate-source-escapes-pack",
+                        &[("name", name), ("path", &rel)],
+                    ));
                 }
                 if std::fs::symlink_metadata(&path)
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
                 {
-                    r.error(format!("{name}: {rel} is a symlink, a pack cannot carry one"));
+                    r.error(i18n::t_args(
+                        "validate-source-symlink",
+                        &[("name", name), ("path", &rel)],
+                    ));
                 }
             }
         }
     }
-    r.warnings.push(format!("{total} override files"));
+    r.warnings.push(i18n::t_args(
+        "validate-override-files",
+        &[("count", &total.to_string())],
+    ));
     r
 }

@@ -2,13 +2,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::cli::WorkflowKind;
 use crate::loaders::{self, LoaderKind};
-use crate::manifest::{
-    self, Manifest, Package, PkgType, Softwares, Target, Targetish,
-};
+use crate::manifest::{self, Manifest, Package, PkgType, Softwares, Target, Targetish};
 use crate::modrinth::Modrinth;
 
 const BUILD_SOURCE_WORKFLOW: &str = include_str!("../assets/build-source.yml");
@@ -293,7 +291,13 @@ pub async fn new(
     pack.stamp();
     softwares.stamp();
 
-    write_project_files(&dir, &pack, &softwares, &name, plan.workflow.unwrap_or(WorkflowKind::Source))?;
+    write_project_files(
+        &dir,
+        &pack,
+        &softwares,
+        &name,
+        plan.workflow.unwrap_or(WorkflowKind::Source),
+    )?;
 
     let committed = if git { init_repo(&dir)? } else { false };
     Ok((dir, committed, softwares.targets))

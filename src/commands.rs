@@ -2,36 +2,36 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 
+use crate::Launcher;
+use crate::account;
 use crate::build;
+use crate::i18n;
 use crate::importer;
 use crate::loaders::{self, LoaderKind};
+use crate::locale;
 use crate::lock::{Lock, LockedPackage, LockedTarget};
 use crate::manifest::{
-    self, Env, LoaderSpec, Manifest, Package, PkgType, RpPosition, Softwares, Support, Target,
-    Targetish, LOCK_FILE, MANIFEST_FILE, SOFTWARES_FILE,
+    self, Env, LOCK_FILE, LoaderSpec, MANIFEST_FILE, Manifest, Package, PkgType, RpPosition,
+    SOFTWARES_FILE, Softwares, Support, Target, Targetish,
 };
 use crate::minecraft;
 use crate::modmeta;
-use futures_util::StreamExt;
 use crate::modrinth::{
-    is_modrinth_id, AuthFailure, Category, CreateVersion, Disclosure, Environment, Modrinth,
-    Resolved, SearchFilters, SearchHit, Sort, DEFAULT_API,
+    AuthFailure, Category, CreateVersion, DEFAULT_API, Disclosure, Environment, Modrinth, Resolved,
+    SearchFilters, SearchHit, Sort, is_modrinth_id,
 };
 use crate::scaffold::{self, NewPlan};
 use crate::secret;
 use crate::staging;
 use crate::validate;
-use crate::Launcher;
 use crate::{Cli, Cmd, WorkflowKind};
+use futures_util::StreamExt;
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
-    let api = cli
-        .api
-        .clone()
-        .unwrap_or_else(|| DEFAULT_API.to_string());
+    let api = cli.api.clone().unwrap_or_else(|| DEFAULT_API.to_string());
     match &cli.cmd {
         Cmd::Search {
             query,
@@ -43,7 +43,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             page,
         } => {
             let browsing = query.as_deref().unwrap_or("").trim().is_empty();
-            let sort = sort.or(if browsing { Some(Sort::Downloads) } else { None });
+            let sort = sort.or(if browsing {
+                Some(Sort::Downloads)
+            } else {
+                None
+            });
             let seeded = SearchFilters {
                 query: query.clone().unwrap_or_default(),
                 project_types: kind.iter().map(|k| k.modrinth_type().to_string()).collect(),
@@ -95,7 +99,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Find { query, remove } => find_cmd(&cli, query, *remove),
         Cmd::Java => java_cmd(&cli),
         Cmd::List { mc, loader } => list(&cli, mc.as_deref(), *loader),
-        Cmd::Lock { mc, loader, check } => lock_cmd(&cli, &api, mc.as_deref(), *loader, *check).await,
+        Cmd::Lock { mc, loader, check } => {
+            lock_cmd(&cli, &api, mc.as_deref(), *loader, *check).await
+        }
         Cmd::Build {
             mc,
             loader,
@@ -152,7 +158,17 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             loader,
             dry_run,
             update_changelogs,
-        } => update_cmd(&cli, &api, mc.as_deref(), *loader, *dry_run, *update_changelogs).await,
+        } => {
+            update_cmd(
+                &cli,
+                &api,
+                mc.as_deref(),
+                *loader,
+                *dry_run,
+                *update_changelogs,
+            )
+            .await
+        }
         Cmd::OneVer { version } => one_ver(&cli, &api, version).await,
         Cmd::SyncPackActive {
             mc,
@@ -183,17 +199,32 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             out,
             mc,
             loader,
-        } => publish(
-            &cli,
-            &api,
-            token.as_deref(),
-            project_id.as_deref(),
-            out,
-            mc.as_deref(),
-            *loader,
-        )
-        .await,
+        } => {
+            publish(
+                &cli,
+                &api,
+                token.as_deref(),
+                project_id.as_deref(),
+                out,
+                mc.as_deref(),
+                *loader,
+            )
+            .await
+        }
+        Cmd::Locale { action } => match action {
+            crate::LocaleAction::List => {
+                locale::list();
+                Ok(())
+            }
+            crate::LocaleAction::Set { locale } => locale::set(locale),
+        },
         Cmd::Validate => validate_cmd(&cli).await,
+        Cmd::Account {
+            login,
+            logout,
+            show,
+            client_id,
+        } => account_cmd(&cli, *login, *logout, *show, client_id.as_deref()).await,
         Cmd::SetRelease { version } => set_release(&cli, &api, &version).await,
         Cmd::UpdateSchema => update_schema(&cli),
         Cmd::Test {
@@ -207,6 +238,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             install_java_if_no_there,
             vendor,
             java_path,
+            msa,
+            msa_login,
+            client_id,
         } => {
             test_cmd(
                 &cli,
@@ -221,6 +255,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 *install_java_if_no_there,
                 vendor.as_deref(),
                 java_path.as_deref(),
+                *msa,
+                *msa_login,
+                client_id.as_deref(),
             )
             .await
         }
@@ -236,8 +273,7 @@ struct Project {
 fn load_project(cli: &Cli) -> Result<Project> {
     let dir = manifest::find_manifest(&cli.dir)?;
     let pack = Manifest::load(&dir)?;
-    let softwares = Softwares::load(&dir)?
-        .context("no softwares.json here, run `ehmodpack new` first")?;
+    let softwares = Softwares::load(&dir)?.context(i18n::t("load-no-softwares"))?;
     Ok(Project {
         dir,
         manifest: pack,
@@ -268,11 +304,7 @@ fn version_candidates(pkg: &Package, target: &Target) -> Vec<String> {
     out
 }
 
-async fn resolve_one(
-    client: &Modrinth,
-    target: &Target,
-    pkg: &Package,
-) -> Result<Resolved> {
+async fn resolve_one(client: &Modrinth, target: &Target, pkg: &Package) -> Result<Resolved> {
     let key = pkg.key();
     let loaders = loaders_for(target);
     let mut last = String::new();
@@ -289,12 +321,20 @@ async fn resolve_one(
         }
     }
     if !last.is_empty() {
-        detail_note(&format!("{key} had no {} on this target, taking the newest", last));
+        detail_note(&i18n::t_args(
+            "resolve-no-pinned",
+            &[("key", key.as_str()), ("last", last.as_str())],
+        ));
     }
     let found = client
         .resolve(&key, Some(&target.minecraft), &loaders)
         .await
-        .with_context(|| format!("{key} has nothing for {}", target.label()))?;
+        .with_context(|| {
+            i18n::t_args(
+                "resolve-nothing",
+                &[("key", key.as_str()), ("target", target.label().as_str())],
+            )
+        })?;
     ensure_kind_fits(pkg.kind, &found)?;
     Ok(found)
 }
@@ -307,9 +347,14 @@ fn ensure_kind_fits(kind: PkgType, found: &Resolved) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "{} is a {}, it cannot be a mod in mods/",
-        found.project.slug,
-        found.project.project_type
+        "{}",
+        i18n::t_args(
+            "resolve-wrong-kind",
+            &[
+                ("slug", found.project.slug.as_str()),
+                ("kind", found.project.project_type.as_str()),
+            ]
+        )
     )
 }
 
@@ -321,20 +366,32 @@ fn detail_note(text: &str) {
 
 async fn unsupported_note(client: &Modrinth, key: &str, target: &Target) -> String {
     let what = match client.project(key).await {
-        Ok(p) => format!(
-            "{} on {}",
-            p.loaders.join("/"),
-            if p.game_versions.is_empty() {
-                "no minecraft versions".to_string()
-            } else {
-                format!("{} versions", p.game_versions.len())
-            }
+        Ok(p) => i18n::t_args(
+            "resolve-on-versions",
+            &[
+                ("loaders", &p.loaders.join("/")),
+                (
+                    "versions",
+                    &if p.game_versions.is_empty() {
+                        i18n::t("resolve-no-mc-versions")
+                    } else {
+                        i18n::t_args(
+                            "resolve-versions-count",
+                            &[("count", &p.game_versions.len().to_string())],
+                        )
+                    },
+                ),
+            ],
         ),
-        Err(_) => "nothing we can see".to_string(),
+        Err(_) => i18n::t("resolve-nothing-visible"),
     };
-    format!(
-        "{key} only supports {what} and we couldn't find one for {}, so building the modpack will don't have this {key}",
-        target.label()
+    i18n::t_args(
+        "resolve-unsupported",
+        &[
+            ("key", key),
+            ("what", what.as_str()),
+            ("target", target.label().as_str()),
+        ],
     )
 }
 
@@ -390,11 +447,19 @@ fn kind_of(project_type: &str) -> PkgType {
     }
 }
 
-async fn keep_loader(client: &Modrinth, hits: Vec<SearchHit>, loader: LoaderKind) -> Vec<SearchHit> {
+async fn keep_loader(
+    client: &Modrinth,
+    hits: Vec<SearchHit>,
+    loader: LoaderKind,
+) -> Vec<SearchHit> {
     let mut kept = Vec::new();
     for hit in hits {
         match client.project(&hit.slug).await {
-            Ok(p) if p.loaders.iter().any(|l| l.eq_ignore_ascii_case(loader.as_str())) => {
+            Ok(p)
+                if p.loaders
+                    .iter()
+                    .any(|l| l.eq_ignore_ascii_case(loader.as_str())) =>
+            {
                 kept.push(hit)
             }
             Ok(_) => {}
@@ -407,7 +472,7 @@ async fn keep_loader(client: &Modrinth, hits: Vec<SearchHit>, loader: LoaderKind
 #[allow(clippy::too_many_arguments)]
 fn summarise_versions(versions: &[String]) -> String {
     if versions.is_empty() {
-        return "unknown".to_string();
+        return i18n::t("unknown");
     }
     let mut lines: Vec<String> = Vec::new();
     for v in versions {
@@ -427,34 +492,33 @@ fn summarise_versions(versions: &[String]) -> String {
     }
     let head: Vec<String> = lines.iter().take(3).cloned().collect();
     format!(
-        "{} ({} versions)",
+        "{} ({})",
         head.join(", "),
-        versions.len()
+        i18n::t_args("versions-count", &[("count", &versions.len().to_string())])
     )
 }
 
-async fn with_details(
-    client: &Modrinth,
-    hits: &[SearchHit],
-) -> Vec<(String, String)> {
+async fn with_details(client: &Modrinth, hits: &[SearchHit]) -> Vec<(String, String)> {
     let jobs = hits.iter().map(|h| {
         let slug = h.slug.clone();
         async move { client.project(&slug).await }
     });
-    let projects: Vec<anyhow::Result<crate::modrinth::Project>> =
-        futures_util::stream::iter(jobs).buffer_unordered(12).collect().await;
+    let projects: Vec<anyhow::Result<crate::modrinth::Project>> = futures_util::stream::iter(jobs)
+        .buffer_unordered(12)
+        .collect()
+        .await;
     projects
         .into_iter()
         .map(|p| match p {
             Ok(p) => (
                 if p.loaders.is_empty() {
-                    "unknown".to_string()
+                    i18n::t("unknown")
                 } else {
                     p.loaders.join(", ")
                 },
                 summarise_versions(&p.game_versions),
             ),
-            Err(_) => ("unknown".to_string(), "unknown".to_string()),
+            Err(_) => (i18n::t("unknown"), i18n::t("unknown")),
         })
         .collect()
 }
@@ -471,36 +535,51 @@ async fn search_page(cli: &Cli, api: &str, filters: &SearchFilters) -> Result<()
         say(
             cli,
             &if filters.query.is_empty() {
-                "nothing came back".to_string()
+                i18n::t("nothing-came-back")
             } else {
-                format!("nothing matched {:?}", filters.query)
+                i18n::t_args(
+                    "search-nothing-matched",
+                    &[("query", &format!("{:?}", filters.query))],
+                )
             },
         );
         return Ok(());
     }
     let added = added_slugs(cli);
     let details = with_details(&client, &found.hits).await;
-    println!(
-        "{}",
-        hits_table(cli, &found.hits, &added, &details)
-    );
+    println!("{}", hits_table(cli, &found.hits, &added, &details));
     let limit = filters.limit.clamp(1, 100);
     let pages = found.total_hits.div_ceil(limit);
     println!(
-        "\npage {} of {pages}, showing {} of {} results",
-        filters.page,
-        found.hits.len(),
-        found.total_hits
+        "\n{}",
+        i18n::t_args(
+            "search-page-status",
+            &[
+                ("page", &filters.page.to_string()),
+                ("pages", &pages.to_string()),
+                ("shown", &found.hits.len().to_string()),
+                ("total", &found.total_hits.to_string()),
+            ]
+        )
     );
     let active = filters.active_lines();
     if !active.is_empty() {
-        println!("filters: {}", active.join(" | "));
+        println!(
+            "{}",
+            i18n::t_args("filters-line", &[("filters", &active.join(" | "))])
+        );
     }
     if filters.page < pages {
-        println!("next: ehmodpack search --page {}", filters.page + 1);
+        println!(
+            "{}",
+            i18n::t_args(
+                "search-next-cmd",
+                &[("page", &(filters.page + 1).to_string())]
+            )
+        );
     }
-    println!("look at one with: ehmodpack info <slug>");
-    println!("add one with: ehmodpack add <slug>");
+    println!("{}", i18n::t("search-info-hint"));
+    println!("{}", i18n::t("search-add-hint"));
     Ok(())
 }
 
@@ -535,21 +614,23 @@ enum Nav {
 
 fn marked(chosen: &[String], name: &str) -> String {
     if chosen.iter().any(|c| c == name) {
-        format!("{name}  (on)")
+        format!("{name}  {}", i18n::t("marked-on"))
     } else {
-        format!("{name}  (off)")
+        format!("{name}  {}", i18n::t("marked-off"))
     }
 }
 
-const BACK: &str = "back";
+fn back() -> String {
+    i18n::t("option-back")
+}
 
 fn with_back(mut options: Vec<String>) -> Vec<String> {
-    options.push(BACK.to_string());
+    options.push(back());
     options
 }
 
 fn went_back(chosen: &[String]) -> bool {
-    chosen.iter().any(|c| c == BACK)
+    chosen.iter().any(|c| c == &back())
 }
 
 fn picked_indices(options: &[String], chosen: &[String]) -> Vec<usize> {
@@ -568,7 +649,7 @@ async fn edit_category(
     filters: &mut SearchFilters,
 ) -> Result<()> {
     if cats.is_none() {
-        say(cli, "asking modrinth what categories it has...");
+        say(cli, &i18n::t("category-asking"));
         *cats = Some(client.categories().await?);
     }
     let list = cats.as_ref().expect("just filled");
@@ -609,11 +690,11 @@ async fn edit_category(
 
     loop {
         let menu = vec![
-            "only show these categories".to_string(),
-            "hide these categories".to_string(),
-            "back".to_string(),
+            i18n::t("category-menu-only"),
+            i18n::t("category-menu-hide"),
+            back(),
         ];
-        let picked = inquire::Select::new("edit category", menu.clone())
+        let picked = inquire::Select::new(&i18n::t("category-prompt"), menu.clone())
             .prompt()
             .map_err(ask_failed)?;
         let Some(i) = menu.iter().position(|o| *o == picked) else {
@@ -622,10 +703,9 @@ async fn edit_category(
         match i {
             0 => {
                 let current = filters.categories.clone();
-                let options: Vec<String> =
-                    names.iter().map(|n| marked(&current, n)).collect();
+                let options: Vec<String> = names.iter().map(|n| marked(&current, n)).collect();
                 let chosen = inquire::MultiSelect::new(
-                    "only show projects with these categories",
+                    &i18n::t("category-only-prompt"),
                     with_back(options.clone()),
                 )
                 .with_page_size(24)
@@ -642,9 +722,9 @@ async fn edit_category(
                 filters.project_types = groups
                     .iter()
                     .filter(|(_, items)| {
-                        items.iter().any(|c| {
-                            filters.categories.iter().any(|f| f.ends_with(&c.name))
-                        })
+                        items
+                            .iter()
+                            .any(|c| filters.categories.iter().any(|f| f.ends_with(&c.name)))
                     })
                     .map(|(k, _)| k.clone())
                     .collect();
@@ -655,11 +735,13 @@ async fn edit_category(
                     .map(|c| c.name.clone())
                     .filter(|n| !filters.categories.contains(n))
                     .collect();
-                let picked =
-                    inquire::MultiSelect::new("hide these categories", with_back(base.clone()))
-                        .with_page_size(24)
-                        .prompt()
-                        .map_err(ask_failed)?;
+                let picked = inquire::MultiSelect::new(
+                    &i18n::t("category-menu-hide"),
+                    with_back(base.clone()),
+                )
+                .with_page_size(24)
+                .prompt()
+                .map_err(ask_failed)?;
                 if went_back(&picked) {
                     continue;
                 }
@@ -680,20 +762,20 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
     loop {
         let active = filters.active_lines();
         let header = if active.is_empty() {
-            "filters, nothing set".to_string()
+            i18n::t("filters-empty-header")
         } else {
-            format!("filters, {}", active.join(" | "))
+            i18n::t_args("filters-header", &[("filters", &active.join(" | "))])
         };
         let options = vec![
-            "Open Source".to_string(),
-            "Supports".to_string(),
-            "Disclosure Exclusions".to_string(),
-            "Only with these disclosures".to_string(),
-            "Minecraft Version".to_string(),
-            "loader".to_string(),
-            "Sorted By".to_string(),
-            "Clear every filter".to_string(),
-            "Back".to_string(),
+            i18n::t("filter-option-open-source"),
+            i18n::t("filter-option-supports"),
+            i18n::t("filter-option-disclosure-exclusions"),
+            i18n::t("filter-option-only-disclosures"),
+            i18n::t("filter-option-minecraft-version"),
+            i18n::t("filter-option-loader"),
+            i18n::t("filter-option-sorted-by"),
+            i18n::t("filter-option-clear"),
+            i18n::t("filter-option-back"),
         ];
         let picked = inquire::Select::new(&header, options.clone())
             .with_page_size(12)
@@ -706,11 +788,11 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
         match i {
             0 => {
                 let open = inquire::Select::new(
-                    "Open Source",
+                    &i18n::t("filter-option-open-source"),
                     with_back(vec![
-                        "any".to_string(),
-                        "only open source".to_string(),
-                        "only closed source".to_string(),
+                        i18n::t("filter-open-any"),
+                        i18n::t("filter-open-only-open"),
+                        i18n::t("filter-open-only-closed"),
                     ]),
                 )
                 .prompt()
@@ -718,24 +800,22 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
                 if went_back(std::slice::from_ref(&open)) {
                     continue;
                 }
-                filters.open_source = match open.as_str() {
-                    "only open source" => Some(true),
-                    "only closed source" => Some(false),
-                    _ => None,
+                filters.open_source = if open == i18n::t("filter-open-only-open") {
+                    Some(true)
+                } else if open == i18n::t("filter-open-only-closed") {
+                    Some(false)
+                } else {
+                    None
                 };
             }
             1 => {
-                let current: Vec<String> = filters
-                    .environments
-                    .iter()
-                    .map(|e| e.label().to_string())
-                    .collect();
+                let current: Vec<String> = filters.environments.iter().map(|e| e.label()).collect();
                 let options: Vec<String> = Environment::all()
                     .iter()
-                    .map(|e| marked(&current, e.label()))
+                    .map(|e| marked(&current, &e.label()))
                     .collect();
                 let chosen = inquire::MultiSelect::new(
-                    "Supports",
+                    &i18n::t("filter-option-supports"),
                     with_back(options.clone()),
                 )
                 .with_page_size(12)
@@ -753,14 +833,14 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
                 let current: Vec<String> = filters
                     .exclude_disclosures
                     .iter()
-                    .map(|d| d.label().to_string())
+                    .map(|d| d.label())
                     .collect();
                 let options: Vec<String> = Disclosure::all()
                     .iter()
-                    .map(|d| marked(&current, d.label()))
+                    .map(|d| marked(&current, &d.label()))
                     .collect();
                 let chosen = inquire::MultiSelect::new(
-                    "Hides any project with any of the disclosures applied",
+                    &i18n::t("filter-hide-disclosures-prompt"),
                     with_back(options.clone()),
                 )
                 .with_page_size(12)
@@ -778,14 +858,14 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
                 let current: Vec<String> = filters
                     .include_disclosures
                     .iter()
-                    .map(|d| d.label().to_string())
+                    .map(|d| d.label())
                     .collect();
                 let options: Vec<String> = Disclosure::all()
                     .iter()
-                    .map(|d| marked(&current, d.label()))
+                    .map(|d| marked(&current, &d.label()))
                     .collect();
                 let chosen = inquire::MultiSelect::new(
-                    "Only with these disclosures",
+                    &i18n::t("filter-option-only-disclosures"),
                     with_back(options.clone()),
                 )
                 .with_page_size(12)
@@ -801,9 +881,9 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
             }
             4 => {
                 let current = filters.versions.first().cloned().unwrap_or_default();
-                let raw = ask(&format!(
-                    "Minecraft Version (currently {:?}, \"any\" clears it, \"back\" keeps it)",
-                    current
+                let raw = ask(&i18n::t_args(
+                    "filter-version-prompt",
+                    &[("current", &format!("{current:?}"))],
                 ))?;
                 let trimmed = raw.trim().to_string();
                 if trimmed.eq_ignore_ascii_case("back") || trimmed.is_empty() {
@@ -818,15 +898,14 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
             5 => {
                 let tags = client.loaders().await?;
                 let current = filters.loaders.clone();
-                let options: Vec<String> = tags
-                    .iter()
-                    .map(|t| marked(&current, &t.name))
-                    .collect();
-                let chosen =
-                    inquire::MultiSelect::new("loader", with_back(options.clone()))
-                        .with_page_size(16)
-                        .prompt()
-                        .map_err(ask_failed)?;
+                let options: Vec<String> = tags.iter().map(|t| marked(&current, &t.name)).collect();
+                let chosen = inquire::MultiSelect::new(
+                    &i18n::t("filter-option-loader"),
+                    with_back(options.clone()),
+                )
+                .with_page_size(16)
+                .prompt()
+                .map_err(ask_failed)?;
                 if went_back(&chosen) {
                     continue;
                 }
@@ -836,26 +915,22 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
                     .collect();
             }
             6 => {
-                let choices = [
-                    ("relevance", Sort::Relevance),
-                    ("follows", Sort::Follows),
-                    ("downloads", Sort::Downloads),
-                    ("newest", Sort::Newest),
-                    ("updated", Sort::Updated),
+                let choices: Vec<(String, Sort)> = vec![
+                    (i18n::t("sort-relevance"), Sort::Relevance),
+                    (i18n::t("sort-follows"), Sort::Follows),
+                    (i18n::t("sort-downloads"), Sort::Downloads),
+                    (i18n::t("sort-newest"), Sort::Newest),
+                    (i18n::t("sort-updated"), Sort::Updated),
                 ];
-                let mut options: Vec<String> =
-                    choices.iter().map(|(n, _)| (*n).to_string()).collect();
-                options.push(BACK.to_string());
-                let picked = inquire::Select::new("Sorted By", options)
+                let mut options: Vec<String> = choices.iter().map(|(n, _)| n.clone()).collect();
+                options.push(back());
+                let picked = inquire::Select::new(&i18n::t("filter-option-sorted-by"), options)
                     .prompt()
                     .map_err(ask_failed)?;
-                if picked == BACK {
+                if picked == back() {
                     continue;
                 }
-                filters.sort = choices
-                    .iter()
-                    .find(|(n, _)| *n == picked)
-                    .map(|(_, s)| *s);
+                filters.sort = choices.iter().find(|(n, _)| *n == picked).map(|(_, s)| *s);
             }
             7 => {
                 filters.project_types.clear();
@@ -867,7 +942,7 @@ async fn edit_filters(cli: &Cli, client: &Modrinth, filters: &mut SearchFilters)
                 filters.open_source = None;
                 filters.include_disclosures.clear();
                 filters.exclude_disclosures.clear();
-                warn(cli, "cleared every filter");
+                warn(cli, &i18n::t("filters-cleared"));
             }
             _ => return Ok(()),
         }
@@ -885,15 +960,18 @@ async fn interactive_search(cli: &Cli, api: &str, mut filters: SearchFilters) ->
             at_menu = false;
             let active = filters.active_lines();
             let header = if active.is_empty() {
-                "Search for what in modrinth".to_string()
+                i18n::t("search-menu-header")
             } else {
-                format!("Search for what in modrinth, filters: {}", active.join(" | "))
+                i18n::t_args(
+                    "search-menu-header-filtered",
+                    &[("filters", &active.join(" | "))],
+                )
             };
             let options = vec![
-                "search for something".to_string(),
-                "edit category".to_string(),
-                "edit filters".to_string(),
-                "quit".to_string(),
+                i18n::t("search-menu-search"),
+                i18n::t("search-menu-category"),
+                i18n::t("search-menu-filters"),
+                i18n::t("search-menu-quit"),
             ];
             let picked = inquire::Select::new(&header, options.clone())
                 .prompt()
@@ -903,7 +981,7 @@ async fn interactive_search(cli: &Cli, api: &str, mut filters: SearchFilters) ->
             };
             match i {
                 0 => {
-                    let raw = ask("search modrinth for")?;
+                    let raw = ask(&i18n::t("search-prompt"))?;
                     filters.query = raw.trim().to_string();
                     filters.page = 1;
                     if filters.query.is_empty() {
@@ -926,7 +1004,13 @@ async fn interactive_search(cli: &Cli, api: &str, mut filters: SearchFilters) ->
             let mut page = filters.page;
             let found = client.search_page(&filters).await?;
             if found.hits.is_empty() {
-                warn(cli, &format!("nothing matched {:?}", filters.query));
+                warn(
+                    cli,
+                    &i18n::t_args(
+                        "search-nothing-matched",
+                        &[("query", &format!("{:?}", filters.query))],
+                    ),
+                );
                 filters.page = 1;
                 break;
             }
@@ -939,14 +1023,11 @@ async fn interactive_search(cli: &Cli, api: &str, mut filters: SearchFilters) ->
                 .enumerate()
                 .map(|(i, h)| {
                     let mark = if added.contains(&h.slug.to_ascii_lowercase()) {
-                        " (added)"
+                        format!(" {}", i18n::t("added-mark"))
                     } else {
-                        ""
+                        String::new()
                     };
-                    let loaders = details
-                        .get(i)
-                        .map(|(l, _)| l.clone())
-                        .unwrap_or_default();
+                    let loaders = details.get(i).map(|(l, _)| l.clone()).unwrap_or_default();
                     format!(
                         "{:<26} {:>9}{mark}  {:<22} {}",
                         h.slug,
@@ -960,33 +1041,47 @@ async fn interactive_search(cli: &Cli, api: &str, mut filters: SearchFilters) ->
             let first_nav = options.len();
             let mut navs: Vec<Nav> = Vec::new();
             if page < pages {
-                options.push(format!("next page ({}/{})", page + 1, pages));
+                options.push(i18n::t_args(
+                    "search-next-page",
+                    &[
+                        ("next", &(page + 1).to_string()),
+                        ("pages", &pages.to_string()),
+                    ],
+                ));
                 navs.push(Nav::Next);
             }
             if page > 1 {
-                options.push("previous page".to_string());
+                options.push(i18n::t("search-previous-page"));
                 navs.push(Nav::Prev);
             }
-            options.push("edit filters".to_string());
+            options.push(i18n::t("search-menu-filters"));
             navs.push(Nav::EditFilters);
-            options.push("edit category".to_string());
+            options.push(i18n::t("search-menu-category"));
             navs.push(Nav::EditCategory);
-            options.push("search again".to_string());
+            options.push(i18n::t("search-again"));
             navs.push(Nav::NewSearch);
-            options.push("back to the start".to_string());
+            options.push(i18n::t("search-back-to-start"));
             navs.push(Nav::BackToStart);
-            options.push("quit".to_string());
+            options.push(i18n::t("search-menu-quit"));
             navs.push(Nav::Quit);
 
             let active = filters.active_lines();
-            let mut header = format!(
-                "\"{}\"  -  {} of {} results",
-                filters.query,
-                found.hits.len() + (page - 1) * limit,
-                found.total_hits
+            let mut header = i18n::t_args(
+                "search-results-header",
+                &[
+                    ("query", filters.query.as_str()),
+                    (
+                        "shown",
+                        &(found.hits.len() + (page - 1) * limit).to_string(),
+                    ),
+                    ("total", &found.total_hits.to_string()),
+                ],
             );
             if !active.is_empty() {
-                header.push_str(&format!("\nfilters: {}", active.join(" | ")));
+                header.push_str(&format!(
+                    "\n{}",
+                    i18n::t_args("filters-line", &[("filters", &active.join(" | "))])
+                ));
             }
             let picked = inquire::Select::new(&header, options.clone())
                 .with_page_size(20)
@@ -1039,9 +1134,9 @@ fn hit_line(h: &SearchHit, added: &BTreeSet<String>) -> String {
     let mark = if added.contains(&h.slug.to_ascii_lowercase())
         || added.contains(&h.project_id.to_ascii_lowercase())
     {
-        " (added)"
+        format!(" {}", i18n::t("added-mark"))
     } else {
-        ""
+        String::new()
     };
     format!(
         "{:<26} {:>9}{mark}  {}",
@@ -1065,7 +1160,7 @@ fn hits_table(
         let (loaders, versions) = details
             .get(i)
             .cloned()
-            .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()));
+            .unwrap_or_else(|| (i18n::t("unknown"), i18n::t("unknown")));
         let mut row = vec![
             h.slug.clone(),
             h.project_type.clone(),
@@ -1075,19 +1170,20 @@ fn hits_table(
             truncate(&h.description, 34),
         ];
         if is_added {
-            row.push("(added)".to_string());
+            row.push(i18n::t("added-marker"));
         }
         rows.push(row);
         flags.push(is_added);
     }
-    let mut headers = vec![
-        "slug",
-        "type",
-        "downloads",
-        "loaders",
-        "minecraft",
-        "description",
+    let header_text = vec![
+        i18n::t("header-slug"),
+        i18n::t("header-type"),
+        i18n::t("header-downloads"),
+        i18n::t("header-loaders"),
+        i18n::t("header-minecraft"),
+        i18n::t("header-description"),
     ];
+    let mut headers: Vec<&str> = header_text.iter().map(String::as_str).collect();
     if added_had_any(&flags) {
         headers.push("");
     }
@@ -1113,30 +1209,51 @@ async fn info(cli: &Cli, api: &str, project: &str) -> Result<String> {
     let people = client.people_of(&p).await;
     let disclosures = client.disclosures_of(&p).await.unwrap_or_default();
     say(cli, &p.title);
-    println!("  slug       {}", p.slug);
-    println!("  id         {}", p.id);
-    println!("  type       {}", p.project_type);
+    println!("  {:<10} {}", i18n::t("header-slug"), p.slug);
+    println!("  {:<10} {}", i18n::t("header-id"), p.id);
+    println!("  {:<10} {}", i18n::t("header-type"), p.project_type);
     println!(
-        "  by         {}",
+        "  {:<10} {}",
+        i18n::t("header-by"),
         if people.is_empty() {
-            "unknown".to_string()
+            i18n::t("unknown")
         } else {
             people.join(", ")
         }
     );
-    println!("  downloads  {}", thousands(p.downloads));
-    println!("  followers  {}", thousands(p.followers));
-    println!("  updated    {}", short_date(&p.updated));
-    println!("  loaders    {}", p.loaders.join(", "));
-    println!("  versions   {}", p.game_versions.len());
+    println!(
+        "  {:<10} {}",
+        i18n::t("header-downloads"),
+        thousands(p.downloads)
+    );
+    println!(
+        "  {:<10} {}",
+        i18n::t("header-followers"),
+        thousands(p.followers)
+    );
+    println!(
+        "  {:<10} {}",
+        i18n::t("header-updated"),
+        short_date(&p.updated)
+    );
+    println!(
+        "  {:<10} {}",
+        i18n::t("header-loaders"),
+        p.loaders.join(", ")
+    );
+    println!(
+        "  {:<10} {}",
+        i18n::t("header-versions"),
+        p.game_versions.len()
+    );
     if let Some(l) = &p.license {
-        println!("  license    {} ({})", l.name, l.id);
+        println!("  {:<10} {} ({})", i18n::t("header-license"), l.name, l.id);
     }
     for (label, url) in [
-        ("source", &p.source_url),
-        ("issues", &p.issues_url),
-        ("wiki", &p.wiki_url),
-        ("discord", &p.discord_url),
+        (i18n::t("header-source"), &p.source_url),
+        (i18n::t("header-issues"), &p.issues_url),
+        (i18n::t("header-wiki"), &p.wiki_url),
+        (i18n::t("header-discord"), &p.discord_url),
     ] {
         if let Some(url) = url {
             println!("  {label:<10} {url}");
@@ -1151,10 +1268,10 @@ async fn info(cli: &Cli, api: &str, project: &str) -> Result<String> {
         } else {
             d.platform.clone()
         };
-        println!("  donate     {label}  {}", d.url);
+        println!("  {:<10} {label}  {}", i18n::t("header-donate"), d.url);
     }
     if !disclosures.is_empty() {
-        println!("  disclosures");
+        println!("  {}", i18n::t("header-disclosures"));
         for d in &disclosures {
             println!("    {}", d.heading());
             for line in d.lines() {
@@ -1177,15 +1294,18 @@ fn pick_targets(p: &Project) -> Result<Vec<Target>> {
     let options: Vec<String> = labels
         .iter()
         .cloned()
-        .chain(std::iter::once("all of them".to_string()))
+        .chain(std::iter::once(i18n::t("option-all-of-them")))
         .collect();
     let picked = inquire::MultiSelect::new(
-        &format!("{} has {} targets, where should this go?", MANIFEST_FILE, all.len()),
+        &i18n::t_args(
+            "targets-prompt",
+            &[("file", MANIFEST_FILE), ("count", &all.len().to_string())],
+        ),
         options,
     )
     .prompt()
     .map_err(ask_failed)?;
-    if picked.iter().any(|o| o == "all of them") || picked.is_empty() {
+    if picked.iter().any(|o| o == &i18n::t("option-all-of-them")) || picked.is_empty() {
         return Ok(all.clone());
     }
     let chosen: Vec<Target> = labels
@@ -1195,7 +1315,10 @@ fn pick_targets(p: &Project) -> Result<Vec<Target>> {
         .filter_map(|(i, _)| all.get(i).cloned())
         .collect();
     if chosen.is_empty() {
-        bail!("nothing to install into, {MANIFEST_FILE} targets got emptied");
+        bail!(
+            "{}",
+            i18n::t_args("nothing-to-install", &[("file", MANIFEST_FILE)])
+        );
     }
     Ok(chosen)
 }
@@ -1205,31 +1328,41 @@ fn short_date(stamp: &str) -> String {
 }
 
 fn is_addable_kind(project_type: &str) -> bool {
-    matches!(
-        project_type,
-        "mod" | "resourcepack" | "shader" | "datapack"
-    )
+    matches!(project_type, "mod" | "resourcepack" | "shader" | "datapack")
 }
 
 async fn after_show(cli: &Cli, slug: &str, project_type: &str, from_info: bool) -> Result<()> {
     let addable = is_addable_kind(project_type);
-    let leave = if from_info { "Exit" } else { "Go back" };
+    let leave = if from_info {
+        i18n::t("after-exit")
+    } else {
+        i18n::t("after-go-back")
+    };
     if !addable {
         say(
             cli,
-            &format!("{slug} is a {project_type}, a pack has nowhere to put that"),
+            &i18n::t_args(
+                "after-not-addable",
+                &[("slug", slug), ("kind", project_type)],
+            ),
         );
-        println!("{}", grey(cli, &format!("this is a {project_type}")));
+        println!(
+            "{}",
+            grey(
+                cli,
+                &i18n::t_args("after-this-is", &[("kind", project_type)])
+            )
+        );
     }
     let add_label = if addable {
-        "Add this".to_string()
+        i18n::t("after-add-this")
     } else {
-        grey(cli, "Add this")
+        grey(cli, &i18n::t("after-add-this"))
     };
-    let menu = vec![add_label, leave.to_string()];
+    let menu = vec![add_label, leave];
 
     loop {
-        let picked = inquire::Select::new("What do you want to do?", menu.clone())
+        let picked = inquire::Select::new(&i18n::t("after-prompt"), menu.clone())
             .with_starting_cursor(0)
             .prompt()
             .map_err(ask_failed)?;
@@ -1240,17 +1373,26 @@ async fn after_show(cli: &Cli, slug: &str, project_type: &str, from_info: bool) 
             return Ok(());
         }
         if !addable {
-            say(cli, &format!("{slug} is a {project_type}, so no"));
+            say(
+                cli,
+                &i18n::t_args(
+                    "after-not-addable-no",
+                    &[("slug", slug), ("kind", project_type)],
+                ),
+            );
             continue;
         }
         let Ok(p) = load_project(cli) else {
-            println!("add it with: ehmodpack add {slug}");
+            println!("{}", i18n::t_args("after-add-cmd", &[("slug", slug)]));
             return Ok(());
         };
         if added_slugs(cli).contains(&slug.to_ascii_lowercase()) {
             say(
                 cli,
-                &format!("{slug} is already in {MANIFEST_FILE}, leaving it be"),
+                &i18n::t_args(
+                    "after-already-added",
+                    &[("slug", slug), ("file", MANIFEST_FILE)],
+                ),
             );
             return Ok(());
         }
@@ -1298,37 +1440,50 @@ async fn browse(
             }
         }
         if found.hits.is_empty() {
-            say(cli, "nothing came back");
+            say(cli, &i18n::t("nothing-came-back"));
             return Ok(());
         }
         let limit = filters.limit.clamp(1, 100);
         let pages = found.total_hits.div_ceil(limit);
-        let mut options: Vec<String> =
-            found.hits.iter().map(|h| hit_line(h, &added)).collect();
+        let mut options: Vec<String> = found.hits.iter().map(|h| hit_line(h, &added)).collect();
         let first_nav = options.len();
         let mut navs: Vec<Nav> = Vec::new();
         if filters.page < pages {
-            options.push(format!("next page ({}/{})", filters.page + 1, pages));
+            options.push(i18n::t_args(
+                "search-next-page",
+                &[
+                    ("next", &(filters.page + 1).to_string()),
+                    ("pages", &pages.to_string()),
+                ],
+            ));
             navs.push(Nav::Next);
         }
         if filters.page > 1 {
-            options.push("previous page".to_string());
+            options.push(i18n::t("search-previous-page"));
             navs.push(Nav::Prev);
         }
-        options.push("edit filters".to_string());
+        options.push(i18n::t("search-menu-filters"));
         navs.push(Nav::EditFilters);
-        options.push("quit".to_string());
+        options.push(i18n::t("search-menu-quit"));
         navs.push(Nav::Quit);
 
         let active = filters.active_lines();
-        let mut header = format!(
-            "browsing by {}  -  {} of {}  -  enter adds it",
-            sort.as_str(),
-            found.hits.len() + (filters.page - 1) * limit,
-            found.total_hits
+        let mut header = i18n::t_args(
+            "browse-header",
+            &[
+                ("sort", sort.as_str()),
+                (
+                    "shown",
+                    &(found.hits.len() + (filters.page - 1) * limit).to_string(),
+                ),
+                ("total", &found.total_hits.to_string()),
+            ],
         );
         if !active.is_empty() {
-            header.push_str(&format!("\nfilters: {}", active.join(" | ")));
+            header.push_str(&format!(
+                "\n{}",
+                i18n::t_args("filters-line", &[("filters", &active.join(" | "))])
+            ));
         }
         let picked = inquire::Select::new(&header, options.clone())
             .with_page_size(20)
@@ -1370,9 +1525,14 @@ async fn add(
         None => p.softwares.targets.clone(),
     };
     let total = targets.len();
-    step(cli, 1, 3, &format!("finding {project} on modrinth"));
+    step(
+        cli,
+        1,
+        3,
+        &i18n::t_args("add-finding", &[("project", project)]),
+    );
     add_project(cli, &p, project, version, targets).await?;
-    step(cli, 3, 3, "done");
+    step(cli, 3, 3, &i18n::t("step-done"));
     let _ = (api, kind, total);
     Ok(())
 }
@@ -1420,17 +1580,23 @@ async fn add_dep_tree(
     for target in &targets {
         let loaders = loaders_for(target);
         let found = match version {
-            Some(v) => client
-                .resolve_pinned(project, Some(&target.minecraft), &loaders, v)
-                .await,
-            None => client.resolve(project, Some(&target.minecraft), &loaders).await,
+            Some(v) => {
+                client
+                    .resolve_pinned(project, Some(&target.minecraft), &loaders, v)
+                    .await
+            }
+            None => {
+                client
+                    .resolve(project, Some(&target.minecraft), &loaders)
+                    .await
+            }
         };
         match found {
             Ok(r) => {
                 if r.project.project_type == "modpack" {
                     bail!(
-                        "{} is a modpack, ehmodpack does not stuff modpacks inside modpacks",
-                        r.project.slug
+                        "{}",
+                        i18n::t_args("add-modpack-rejected", &[("slug", r.project.slug.as_str())])
                     );
                 }
                 slug = r.project.slug.clone();
@@ -1449,25 +1615,37 @@ async fn add_dep_tree(
                 );
             }
             Err(e) if targets.len() == 1 => {
-                return Err(e).context("nothing was added");
+                return Err(e).context(i18n::t("add-nothing-added"));
             }
             Err(e) => warn(
                 cli,
-                &format!("skipped {} for {}: {e:#}", project, target.label()),
+                &i18n::t_args(
+                    "add-skipped",
+                    &[
+                        ("project", project),
+                        ("target", target.label().as_str()),
+                        ("error", &format!("{e:#}")),
+                    ],
+                ),
             ),
         }
     }
 
     if versions.is_empty() {
-        bail!("nothing was added");
+        bail!("{}", i18n::t("add-nothing-added"));
     }
-    if p
-        .manifest
+    if p.manifest
         .packages
         .iter()
         .any(|x| x.key().eq_ignore_ascii_case(&slug))
     {
-        bail!("{slug} is already in {MANIFEST_FILE}");
+        bail!(
+            "{}",
+            i18n::t_args(
+                "add-already",
+                &[("slug", slug.as_str()), ("file", MANIFEST_FILE)]
+            )
+        );
     }
 
     let mut learnt: Vec<String> = Vec::new();
@@ -1488,7 +1666,13 @@ async fn add_dep_tree(
         Some(learnt)
     };
     if let Some(list) = &ids {
-        say(cli, &format!("learned {slug} identifies as {}", list.join(", ")));
+        say(
+            cli,
+            &i18n::t_args(
+                "add-learned",
+                &[("slug", slug.as_str()), ("list", &list.join(", "))],
+            ),
+        );
     }
 
     let kind = kind_out.unwrap_or(PkgType::Mod);
@@ -1524,20 +1708,25 @@ async fn add_dep_tree(
     });
     say(
         cli,
-        &format!(
-            "added {slug} to {MANIFEST_FILE} for {count} of {} targets",
-            targets.len()
+        &i18n::t_args(
+            "add-added",
+            &[
+                ("slug", slug.as_str()),
+                ("file", MANIFEST_FILE),
+                ("count", &count.to_string()),
+                ("total", &targets.len().to_string()),
+            ],
         ),
     );
     let last = pack.packages.last().expect("just pushed");
     if let Some(v) = &last.version {
-        println!("  {:<24} {v}", "default");
+        println!("  {:<24} {v}", i18n::t("header-default"));
     }
     for (k, v) in &last.versions {
         println!("  {k:<24} {v}");
     }
     if kind == PkgType::Resourcepack {
-        println!("  it is inactive, set \"active\": true once you want it bundled");
+        println!("  {}", i18n::t("add-inactive-hint"));
     }
 
     let mut pulled: Vec<String> = Vec::new();
@@ -1563,19 +1752,31 @@ async fn add_dep_tree(
         })
         .collect();
     for id in wanted {
-        detail(cli, &format!("{slug} requires {id}"));
+        detail(
+            cli,
+            &i18n::t_args(
+                "dep-required",
+                &[("slug", slug.as_str()), ("id", id.as_str())],
+            ),
+        );
         let fresh = load_project(cli)?;
         match add_with_deps(cli, &fresh, &id, None, targets.clone(), seen).await {
             Ok(()) => pulled.push(id),
-            Err(e) => warn(cli, &format!("could not add {id}, skipping: {e:#}")),
+            Err(e) => warn(
+                cli,
+                &i18n::t_args(
+                    "dep-add-failed",
+                    &[("id", id.as_str()), ("error", &format!("{e:#}"))],
+                ),
+            ),
         }
     }
     if !pulled.is_empty() {
         say(
             cli,
-            &format!(
-                "{slug} installed {} because it was required by the mod",
-                pulled.join(", ")
+            &i18n::t_args(
+                "dep-installed",
+                &[("slug", slug.as_str()), ("list", &pulled.join(", "))],
             ),
         );
     }
@@ -1589,10 +1790,22 @@ fn remove(cli: &Cli, project: &str) -> Result<()> {
         .packages
         .retain(|x| !x.key().eq_ignore_ascii_case(project));
     if p.manifest.packages.len() == before {
-        bail!("{project} is not in {MANIFEST_FILE}");
+        bail!(
+            "{}",
+            i18n::t_args(
+                "remove-missing",
+                &[("project", project), ("file", MANIFEST_FILE)]
+            )
+        );
     }
     p.manifest.write(&p.dir)?;
-    say(cli, &format!("removed {project} from {MANIFEST_FILE}"));
+    say(
+        cli,
+        &i18n::t_args(
+            "remove-done",
+            &[("project", project), ("file", MANIFEST_FILE)],
+        ),
+    );
     Ok(())
 }
 
@@ -1600,19 +1813,22 @@ fn lock_project_has(lock: Option<&Lock>, package_key: &str, query: &str) -> bool
     let Some(lock) = lock else {
         return false;
     };
-    lock.targets.iter().flat_map(|t| t.packages.iter()).any(|lp| {
-        lp.project.eq_ignore_ascii_case(package_key)
-            && (lp.project.eq_ignore_ascii_case(query)
-                || lp.project_id.eq_ignore_ascii_case(query)
-                || lp.version_number == query)
-    })
+    lock.targets
+        .iter()
+        .flat_map(|t| t.packages.iter())
+        .any(|lp| {
+            lp.project.eq_ignore_ascii_case(package_key)
+                && (lp.project.eq_ignore_ascii_case(query)
+                    || lp.project_id.eq_ignore_ascii_case(query)
+                    || lp.version_number == query)
+        })
 }
 
 fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
     let p = load_project(cli)?;
     let q = query.trim();
     if q.is_empty() {
-        bail!("give a project id, slug, embedded id, or an exact version string");
+        bail!("{}", i18n::t("find-query-empty"));
     }
     let lock = if Lock::exists(&p.dir) {
         Some(Lock::load(&p.dir)?)
@@ -1626,7 +1842,11 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
         let mut why = None;
         if pkg.key().eq_ignore_ascii_case(q) {
             why = Some("project/slug".to_string());
-        } else if pkg.ids.as_deref().is_some_and(|ids| ids.iter().any(|x| x.eq_ignore_ascii_case(q))) {
+        } else if pkg
+            .ids
+            .as_deref()
+            .is_some_and(|ids| ids.iter().any(|x| x.eq_ignore_ascii_case(q)))
+        {
             why = Some("embedded id".to_string());
         } else if pkg.version.as_deref() == Some(q) {
             why = Some("default version".to_string());
@@ -1641,7 +1861,11 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
             } else if pkg.versions.is_empty() {
                 "*".to_string()
             } else {
-                pkg.versions.values().cloned().collect::<Vec<_>>().join(", ")
+                pkg.versions
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
             rows.push(vec![
                 format!("{i}"),
@@ -1667,23 +1891,35 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
 
     println!();
     if rows.is_empty() && hit_targets.is_empty() {
-        say(cli, &format!("nothing in this pack matches {q:?}"));
+        say(
+            cli,
+            &i18n::t_args("find-nothing", &[("query", &format!("{q:?}"))]),
+        );
         return Ok(());
     }
     if !rows.is_empty() {
         say(
             cli,
-            &format!(
-                "{} package{} in {MANIFEST_FILE}",
-                rows.len(),
-                if rows.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "find-packages-count",
+                &[
+                    ("count", &rows.len().to_string()),
+                    ("suffix", if rows.len() == 1 { "" } else { "s" }),
+                    ("file", MANIFEST_FILE),
+                ],
             ),
         );
         println!(
             "{}",
             table(
                 cli,
-                &["#", "type", "project", "version(s)", "matched by"],
+                &[
+                    i18n::t("header-index"),
+                    i18n::t("header-type"),
+                    i18n::t("header-project"),
+                    i18n::t("header-version-s"),
+                    i18n::t("header-matched-by"),
+                ],
                 &rows,
                 &vec![false; rows.len()]
             )
@@ -1692,10 +1928,13 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
     if !hit_targets.is_empty() {
         say(
             cli,
-            &format!(
-                "{} target{} in {SOFTWARES_FILE}",
-                hit_targets.len(),
-                if hit_targets.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "find-targets-count",
+                &[
+                    ("count", &hit_targets.len().to_string()),
+                    ("suffix", if hit_targets.len() == 1 { "" } else { "s" }),
+                    ("file", SOFTWARES_FILE),
+                ],
             ),
         );
         let trows: Vec<Vec<String>> = hit_targets
@@ -1721,27 +1960,32 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
         );
     }
     if !remove_all {
-        say(cli, "pass --remove to delete them after a confirm");
+        say(cli, &i18n::t("find-remove-hint"));
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        bail!("removing needs a terminal so you can confirm");
+        bail!("{}", i18n::t("find-needs-terminal"));
     }
     if hit_pkgs.is_empty() && hit_targets.is_empty() {
         return Ok(());
     }
-    let yes = inquire::Confirm::new(&format!(
-        "remove {} package{} and {} target{}?",
-        hit_pkgs.len(),
-        if hit_pkgs.len() == 1 { "" } else { "s" },
-        hit_targets.len(),
-        if hit_targets.len() == 1 { "" } else { "s" }
+    let yes = inquire::Confirm::new(&i18n::t_args(
+        "find-confirm",
+        &[
+            ("packages", &hit_pkgs.len().to_string()),
+            ("package_suffix", if hit_pkgs.len() == 1 { "" } else { "s" }),
+            ("targets", &hit_targets.len().to_string()),
+            (
+                "target_suffix",
+                if hit_targets.len() == 1 { "" } else { "s" },
+            ),
+        ],
     ))
     .with_default(false)
     .prompt()
     .map_err(ask_failed)?;
     if !yes {
-        say(cli, "left it all alone");
+        say(cli, &i18n::t("find-left-alone"));
         return Ok(());
     }
 
@@ -1750,7 +1994,13 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
         for idx in hit_pkgs.iter().rev() {
             let name = p.manifest.packages[*idx].key();
             p.manifest.packages.remove(*idx);
-            say(cli, &format!("removed {name} from {MANIFEST_FILE}"));
+            say(
+                cli,
+                &i18n::t_args(
+                    "find-removed-package",
+                    &[("name", name.as_str()), ("file", MANIFEST_FILE)],
+                ),
+            );
         }
         p.manifest.write(&p.dir)?;
     }
@@ -1760,15 +2010,24 @@ fn find_cmd(cli: &Cli, query: &str, remove_all: bool) -> Result<()> {
         for idx in hit_targets.iter().rev() {
             let label = p.softwares.targets[*idx].label();
             p.softwares.targets.remove(*idx);
-            say(cli, &format!("dropped target {label} from {SOFTWARES_FILE}"));
+            say(
+                cli,
+                &i18n::t_args(
+                    "find-dropped-target",
+                    &[("label", label.as_str()), ("file", SOFTWARES_FILE)],
+                ),
+            );
             gone += 1;
         }
         p.softwares.write(&p.dir)?;
         if gone > 0 {
-            say(cli, &format!("wrote {SOFTWARES_FILE}"));
+            say(
+                cli,
+                &i18n::t_args("wrote-file", &[("file", SOFTWARES_FILE)]),
+            );
         }
     }
-    say(cli, "run `ehmodpack lock` after to refresh the lockfile");
+    say(cli, &i18n::t("find-lock-hint"));
     Ok(())
 }
 
@@ -1780,20 +2039,22 @@ fn list(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) -> Result<()> {
         None
     };
     if p.manifest.packages.is_empty() {
-        say(cli, "no packages yet, try `ehmodpack search`");
+        say(cli, &i18n::t("list-empty"));
         return Ok(());
     }
-    let all_targets: Vec<LockedTarget> = lock
-        .as_ref()
-        .map(|l| l.targets.clone())
-        .unwrap_or_default();
+    let all_targets: Vec<LockedTarget> =
+        lock.as_ref().map(|l| l.targets.clone()).unwrap_or_default();
     let targets: Vec<LockedTarget> = if mc.is_some() || loader.is_some() {
         vec![manifest::pick(&all_targets, mc, loader)?.clone()]
     } else {
         all_targets
     };
 
-    let mut headers: Vec<String> = vec!["type".into(), "package".into(), "wanted".into()];
+    let mut headers: Vec<String> = vec![
+        i18n::t("list-header-type"),
+        i18n::t("list-header-package"),
+        i18n::t("list-header-wanted"),
+    ];
     headers.extend(targets.iter().map(|t| t.label()));
     let head: Vec<&str> = headers.iter().map(String::as_str).collect();
 
@@ -1808,9 +2069,9 @@ fn list(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) -> Result<()> {
             let resolved = lock
                 .as_ref()
                 .and_then(|l| {
-                    l.targets.iter().find(|lt| {
-                        lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind
-                    })
+                    l.targets
+                        .iter()
+                        .find(|lt| lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind)
                 })
                 .and_then(|lt| {
                     lt.packages
@@ -1828,7 +2089,7 @@ fn list(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) -> Result<()> {
     let no_dim: Vec<bool> = rows.iter().map(|_| false).collect();
     println!("{}", table(cli, &head, &rows, &no_dim));
     if lock.is_none() {
-        println!("\nnothing is locked yet, run `ehmodpack lock`");
+        println!("\n{}", i18n::t("nothing-locked-hint"));
     }
     Ok(())
 }
@@ -1857,11 +2118,7 @@ async fn do_lock(
     let wanted: Vec<String> = if mc.is_some() || loader.is_some() {
         vec![manifest::pick(&p.softwares.targets, mc, loader)?.label()]
     } else {
-        p.softwares
-            .targets
-            .iter()
-            .map(Targetish::label)
-            .collect()
+        p.softwares.targets.iter().map(Targetish::label).collect()
     };
 
     let keep: BTreeMap<String, LockedTarget> = if Lock::exists(&p.dir) {
@@ -1890,7 +2147,7 @@ async fn do_lock(
             if pkg.is_skipped(&target.minecraft, &target.loader.kind) {
                 detail(
                     cli,
-                    &format!("{} is skipped (which will not include in the modpack)", pkg.key()),
+                    &i18n::t_args("lock-skipped", &[("key", pkg.key().as_str())]),
                 );
                 continue;
             }
@@ -1906,10 +2163,25 @@ async fn do_lock(
                 }
             }
         }
-        let pulled = pull_deps(cli, &client, &mut p.manifest, target, single, &mut packages, deps).await?;
+        let pulled = pull_deps(
+            cli,
+            &client,
+            &mut p.manifest,
+            target,
+            single,
+            &mut packages,
+            deps,
+        )
+        .await?;
         steps.finish();
         if packages.is_empty() {
-            bail!("nothing at all resolves for {}", target.label());
+            bail!(
+                "{}",
+                i18n::t_args(
+                    "lock-nothing-resolves",
+                    &[("label", target.label().as_str())]
+                )
+            );
         }
         for slug in &pulled {
             if !pulled_all.iter().any(|x| x == slug) {
@@ -1918,15 +2190,26 @@ async fn do_lock(
         }
         say(
             cli,
-            &format!(
-                "locked {} packages for {}{}",
-                packages.len(),
-                target.label(),
-                if missing.is_empty() {
-                    String::new()
-                } else {
-                    format!(", {} could not be had: {}", missing.len(), missing.join(", "))
-                }
+            &i18n::t_args(
+                "lock-summary",
+                &[
+                    ("count", &packages.len().to_string()),
+                    ("label", target.label().as_str()),
+                    (
+                        "missing",
+                        &if missing.is_empty() {
+                            String::new()
+                        } else {
+                            i18n::t_args(
+                                "lock-missing-tail",
+                                &[
+                                    ("count", &missing.len().to_string()),
+                                    ("list", &missing.join(", ")),
+                                ],
+                            )
+                        },
+                    ),
+                ],
             ),
         );
         fresh.insert(
@@ -1943,26 +2226,35 @@ async fn do_lock(
     if !pulled_all.is_empty() {
         say(
             cli,
-            &format!("pulled {} required dep{}: {}", pulled_all.len(), if pulled_all.len() == 1 { "" } else { "s" }, pulled_all.join(", ")),
+            &i18n::t_args(
+                "lock-pulled-deps",
+                &[
+                    ("count", &pulled_all.len().to_string()),
+                    ("suffix", if pulled_all.len() == 1 { "" } else { "s" }),
+                    ("list", &pulled_all.join(", ")),
+                ],
+            ),
         );
         p.manifest.write(&p.dir)?;
-        say(cli, &format!("wrote {MANIFEST_FILE}"));
+        say(cli, &i18n::t_args("wrote-file", &[("file", MANIFEST_FILE)]));
     }
 
     let (renamed_packs, learned_shas) = reconcile_external_packs(cli, p, &fresh);
     if renamed_packs > 0 {
         say(
             cli,
-            &format!(
-                "{} external pack name{} followed a rename",
-                renamed_packs,
-                if renamed_packs == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "lock-renamed-packs",
+                &[
+                    ("count", &renamed_packs.to_string()),
+                    ("suffix", if renamed_packs == 1 { "" } else { "s" }),
+                ],
             ),
         );
     }
     if renamed_packs > 0 || learned_shas > 0 {
         p.manifest.write(&p.dir)?;
-        say(cli, &format!("wrote {MANIFEST_FILE}"));
+        say(cli, &i18n::t_args("wrote-file", &[("file", MANIFEST_FILE)]));
     }
     for (_, t) in fresh.iter_mut() {
         let minecraft = t.minecraft.clone();
@@ -2008,7 +2300,7 @@ async fn do_lock(
         targets,
     )
     .write(&p.dir)?;
-    say(cli, &format!("wrote {LOCK_FILE}"));
+    say(cli, &i18n::t_args("wrote-file", &[("file", LOCK_FILE)]));
     check_schema(cli, p);
     Ok(())
 }
@@ -2042,7 +2334,11 @@ fn add_dep_pin(
         kind,
         project: Some(slug.to_string()),
         id: None,
-        version: if single { Some(version.to_string()) } else { None },
+        version: if single {
+            Some(version.to_string())
+        } else {
+            None
+        },
         versions,
         skip: Vec::new(),
         env: None,
@@ -2088,14 +2384,17 @@ async fn pull_deps(
         if dep.dependency_type != "required" {
             detail(
                 cli,
-                &format!("dep {pid} is {}, not pulling it", dep.dependency_type),
+                &i18n::t_args(
+                    "dep-not-required",
+                    &[("id", pid.as_str()), ("kind", dep.dependency_type.as_str())],
+                ),
             );
             continue;
         }
         if visited.contains(&low) || modmeta::is_platform(&low) {
             detail(
                 cli,
-                &format!("dep {pid} already seen or a platform lib, skipping"),
+                &i18n::t_args("dep-already-seen", &[("id", pid.as_str())]),
             );
             continue;
         }
@@ -2109,21 +2408,46 @@ async fn pull_deps(
                     match crate::modrinth::resolve_from_project(project, version) {
                         Ok(r) => r,
                         Err(e) => {
-                            warn(cli, &format!("dep {pid} {vid} could not be used, skipping: {e:#}"));
+                            warn(
+                                cli,
+                                &i18n::t_args(
+                                    "dep-unusable",
+                                    &[
+                                        ("id", pid.as_str()),
+                                        ("version", vid.as_str()),
+                                        ("error", &format!("{e:#}")),
+                                    ],
+                                ),
+                            );
                             continue;
                         }
                     }
                 }
                 _ => {
-                    warn(cli, &format!("dep {pid} ({vid}) could not be fetched, skipping"));
+                    warn(
+                        cli,
+                        &i18n::t_args(
+                            "dep-unfetchable",
+                            &[("id", pid.as_str()), ("version", vid.as_str())],
+                        ),
+                    );
                     continue;
                 }
             }
         } else {
-            match client.resolve(&pid, Some(&target.minecraft), &loaders).await {
+            match client
+                .resolve(&pid, Some(&target.minecraft), &loaders)
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
-                    warn(cli, &format!("dep {pid} has nothing here, skipping: {e:#}"));
+                    warn(
+                        cli,
+                        &i18n::t_args(
+                            "dep-no-build",
+                            &[("id", pid.as_str()), ("error", &format!("{e:#}"))],
+                        ),
+                    );
                     continue;
                 }
             }
@@ -2132,9 +2456,12 @@ async fn pull_deps(
         if resolved.project.project_type != "mod" {
             warn(
                 cli,
-                &format!(
-                    "dep {pid} is a {}, cannot be a mod dependency, skipping",
-                    resolved.project.project_type
+                &i18n::t_args(
+                    "dep-wrong-kind",
+                    &[
+                        ("id", pid.as_str()),
+                        ("kind", resolved.project.project_type.as_str()),
+                    ],
                 ),
             );
             continue;
@@ -2147,17 +2474,20 @@ async fn pull_deps(
             if declared.is_skipped(&target.minecraft, &target.loader.kind) {
                 warn(
                     cli,
-                    &format!(
-                        "{slug} was supposed to be a required dependency but it was skipped because of the configuration file"
-                    ),
+                    &i18n::t_args("dep-skipped-by-config", &[("slug", slug.as_str())]),
                 );
                 continue;
             }
         }
-        if packages.iter().any(|lp| lp.project.eq_ignore_ascii_case(&slug))
+        if packages
+            .iter()
+            .any(|lp| lp.project.eq_ignore_ascii_case(&slug))
             || visited.contains(&slug.to_ascii_lowercase())
         {
-            detail(cli, &format!("already have {slug}, skipping"));
+            detail(
+                cli,
+                &i18n::t_args("dep-have-already", &[("slug", slug.as_str())]),
+            );
             continue;
         }
         visited.insert(slug.to_ascii_lowercase());
@@ -2173,7 +2503,11 @@ async fn pull_deps(
             kind,
             project: Some(slug.clone()),
             id: None,
-            version: if single { Some(version_number.clone()) } else { None },
+            version: if single {
+                Some(version_number.clone())
+            } else {
+                None
+            },
             versions,
             skip: Vec::new(),
             env: None,
@@ -2200,15 +2534,28 @@ async fn lock_check(
     let p = load_project(cli)?;
     let lock = Lock::load(&p.dir)?;
     if lock.manifest_hash != p.manifest.fingerprint() {
-        bail!("{MANIFEST_FILE} changed since {LOCK_FILE} was written, run `ehmodpack lock`");
+        bail!(
+            "{}",
+            i18n::t_args(
+                "lock-manifest-changed",
+                &[("manifest", MANIFEST_FILE), ("lock", LOCK_FILE)]
+            )
+        );
     }
     let wanted: Vec<String> = p.softwares.targets.iter().map(Targetish::label).collect();
     let have = lock.labels();
     if wanted != have {
         bail!(
-            "targets changed, {SOFTWARES_FILE} has {} but {LOCK_FILE} has {}, run `ehmodpack lock`",
-            wanted.join(", "),
-            have.join(", ")
+            "{}",
+            i18n::t_args(
+                "lock-targets-changed",
+                &[
+                    ("softwares", SOFTWARES_FILE),
+                    ("wanted", &wanted.join(", ")),
+                    ("lock", LOCK_FILE),
+                    ("have", &have.join(", ")),
+                ]
+            )
         );
     }
     let client = Modrinth::new(api)?;
@@ -2230,13 +2577,21 @@ async fn lock_check(
                 .await
             {
                 Ok(r) if r.version.id == pkg.version_id => {}
-                Ok(r) => stale.push(format!(
-                    "{} {} was replaced by {}",
-                    pkg.project, pkg.version_number, r.version.version_number
+                Ok(r) => stale.push(i18n::t_args(
+                    "lock-replaced",
+                    &[
+                        ("project", pkg.project.as_str()),
+                        ("was", pkg.version_number.as_str()),
+                        ("now", r.version.version_number.as_str()),
+                    ],
                 )),
-                Err(e) => stale.push(format!(
-                    "{} {} is gone: {e:#}",
-                    pkg.project, pkg.version_number
+                Err(e) => stale.push(i18n::t_args(
+                    "lock-gone",
+                    &[
+                        ("project", pkg.project.as_str()),
+                        ("version", pkg.version_number.as_str()),
+                        ("error", &format!("{e:#}")),
+                    ],
                 )),
             }
         }
@@ -2244,14 +2599,14 @@ async fn lock_check(
     if stale.is_empty() {
         say(
             cli,
-            &format!("lockfile is fresh, {} targets", lock.targets.len()),
+            &i18n::t_args("lock-fresh", &[("count", &lock.targets.len().to_string())]),
         );
         return Ok(());
     }
     for line in &stale {
         warn(cli, line);
     }
-    bail!("{LOCK_FILE} is stale, run `ehmodpack lock`");
+    bail!("{}", i18n::t_args("lock-stale", &[("lock", LOCK_FILE)]));
 }
 
 async fn build_cmd(
@@ -2267,7 +2622,13 @@ async fn build_cmd(
     let lock = if locked {
         let l = Lock::load(&p.dir)?;
         if l.manifest_hash != p.manifest.fingerprint() {
-            bail!("{MANIFEST_FILE} changed since {LOCK_FILE} was written, run `ehmodpack lock` first");
+            bail!(
+                "{}",
+                i18n::t_args(
+                    "build-manifest-changed",
+                    &[("manifest", MANIFEST_FILE), ("lock", LOCK_FILE)]
+                )
+            );
         }
         l
     } else {
@@ -2308,7 +2669,7 @@ async fn build_cmd(
     };
 
     println!();
-    say(cli, "checking the pack before building");
+    say(cli, &i18n::t("build-checking"));
     print_report(cli, &validate::check(&lock, &p.manifest, &sources))?;
     print_report(cli, &validate::check_sources(&sources))?;
     check_schema(cli, &p);
@@ -2319,7 +2680,7 @@ async fn build_cmd(
             println!();
             say(
                 cli,
-                &format!("active resource packs for {}:", target.label()),
+                &i18n::t_args("build-active-packs", &[("label", target.label().as_str())]),
             );
             for pkg in &active {
                 println!("  {}", pkg.path);
@@ -2329,10 +2690,7 @@ async fn build_cmd(
     println!();
 
     if build::stamp_fresh(&out_dir, &lock, &sources) {
-        say(
-            cli,
-            "everything in the output folder is already built for this lock and these sources",
-        );
+        say(cli, &i18n::t("build-fresh"));
         check_schema(cli, &p);
         return Ok(());
     }
@@ -2342,9 +2700,12 @@ async fn build_cmd(
     for target in chosen {
         say(
             cli,
-            &format!(
-                "building for {}, {}",
-                target.minecraft, target.loader.kind
+            &i18n::t_args(
+                "publish-building-for",
+                &[
+                    ("mc", target.minecraft.as_str()),
+                    ("loader", target.loader.kind.as_str()),
+                ],
             ),
         );
         let on_disk_packs = build::pack_paths_on_disk(&sources);
@@ -2353,9 +2714,9 @@ async fn build_cmd(
             if !pkg.downloads.is_empty() {
                 detail(
                     cli,
-                    &format!(
-                        "{}, {} comes from modrinth as-is, skipping the local copy",
-                        pkg.project, fname
+                    &i18n::t_args(
+                        "build-from-modrinth",
+                        &[("project", pkg.project.as_str()), ("file", fname)],
                     ),
                 );
                 continue;
@@ -2366,18 +2727,18 @@ async fn build_cmd(
                     if got.as_deref().is_some() && got.as_deref() != Some(&pkg.hashes.sha1) {
                         warn(
                             cli,
-                            &format!(
-                                "{} exists but its sha does not match the lock, this build may bundle a wrong version",
-                                pkg.project
+                            &i18n::t_args(
+                                "build-sha-mismatch",
+                                &[("project", pkg.project.as_str())],
                             ),
                         );
                     }
                 }
                 None => warn(
                     cli,
-                    &format!(
-                        "{} is active but {} is not in the overrides, re-run sync-pack-active so this version can activate it",
-                        pkg.project, fname
+                    &i18n::t_args(
+                        "build-not-in-overrides",
+                        &[("project", pkg.project.as_str()), ("file", fname)],
                     ),
                 ),
             }
@@ -2392,32 +2753,52 @@ async fn build_cmd(
             Err(e) => {
                 let _ = staging::wipe(&staged);
                 return Err(e).with_context(|| {
-                    format!("{} did not verify, not printing a build for it", target.label())
+                    i18n::t_args("build-verify-failed", &[("label", target.label().as_str())])
                 });
             }
         };
         detail(
             cli,
-            &format!(
-                "{} files out of {} shas",
-                verified.downloaded, verified.shas
+            &i18n::t_args(
+                "build-shas",
+                &[
+                    ("files", &verified.downloaded.to_string()),
+                    ("shas", &verified.shas.to_string()),
+                ],
             ),
         );
         let path = build::build(&lock, target, &out_dir, &sources)?;
         built_paths.push(path.clone());
         let _ = staging::wipe(&staged);
-        say(cli, &format!("built {}", path.display()));
+        say(
+            cli,
+            &i18n::t_args("build-built", &[("path", &path.display().to_string())]),
+        );
         println!(
-            "  mc {}  loader {} {}  java {}  packages {}",
-            target.minecraft,
-            target.loader.kind,
-            target.loader.version,
-            target.java.as_deref().unwrap_or("-"),
-            target.packages.len()
+            "  {}",
+            i18n::t_args(
+                "build-runtime",
+                &[
+                    ("mc", target.minecraft.as_str()),
+                    ("loader", target.loader.kind.as_str()),
+                    ("version", target.loader.version.as_str()),
+                    ("java", target.java.as_deref().unwrap_or("-")),
+                    ("count", &target.packages.len().to_string()),
+                ]
+            )
         );
         for pkg in &target.packages {
             if let Some(position) = pkg.position {
-                println!("  active {} ({position:?})", pkg.project);
+                println!(
+                    "  {}",
+                    i18n::t_args(
+                        "build-active",
+                        &[
+                            ("project", pkg.project.as_str()),
+                            ("position", &format!("{position:?}")),
+                        ]
+                    )
+                );
             }
         }
     }
@@ -2431,29 +2812,34 @@ fn closing_lines(cli: &Cli, dir: &Path, targets: &[Target], committed: Option<bo
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| dir.display().to_string());
-    say(cli, &format!("Done you can visit your project at cd ./{name}"));
-    say(cli, "you can view README.md in there for the next steps");
+    say(
+        cli,
+        &i18n::t_args("closing-done", &[("name", name.as_str())]),
+    );
+    say(cli, &i18n::t("closing-readme"));
     println!();
-    println!("You can view projects by either:");
+    println!("{}", i18n::t("closing-view-projects"));
     println!();
-    println!("- Searching with ehmodpack search");
-    println!("- Or browsing for it with ehmodpack browse");
+    println!("{}", i18n::t("closing-search"));
+    println!("{}", i18n::t("closing-browse"));
     println!();
     for t in targets {
         println!(
-            "Created a modpack for {} {} with {} {}",
-            t.minecraft,
-            t.loader.kind,
-            t.loader.kind,
-            t.loader.version
+            "{}",
+            i18n::t_args(
+                "closing-created",
+                &[
+                    ("mc", t.minecraft.as_str()),
+                    ("loader", t.loader.kind.as_str()),
+                    ("loader2", t.loader.kind.as_str()),
+                    ("version", t.loader.version.as_str()),
+                ]
+            )
         );
     }
     match committed {
-        Some(true) => println!("  git repo initialised with one commit"),
-        Some(false) => warn(
-            cli,
-            "git repo initialised but the first commit failed, check your git identity",
-        ),
+        Some(true) => println!("  {}", i18n::t("closing-git-commit")),
+        Some(false) => warn(cli, &i18n::t("closing-git-failed")),
         None => {}
     }
 }
@@ -2472,7 +2858,11 @@ async fn new_cmd(
         cli,
         &dir,
         &targets,
-        if git_flag || committed { Some(committed) } else { None },
+        if git_flag || committed {
+            Some(committed)
+        } else {
+            None
+        },
     );
     Ok(())
 }
@@ -2490,26 +2880,23 @@ async fn new_from_mrpack(
     force: bool,
 ) -> Result<()> {
     let workflow = pick_workflow(cli, workflow)?;
-    notice(cli, importer::LICENSE_WARNING);
+    notice(cli, &importer::license_warning());
     println!();
 
-    step(cli, 1, 6, "reading the archive");
+    step(cli, 1, 6, &i18n::t("import-reading-archive"));
     let index = importer::read_index(mrpack)?;
     let pack_name = name
         .map(str::to_string)
         .unwrap_or_else(|| importer::name_of(&index));
     let dir = cli
         .dir
-        .join(folder.map_or_else(
-            || scaffold::slugify(&pack_name),
-            |f| scaffold::slugify(f),
-        ));
+        .join(folder.map_or_else(|| scaffold::slugify(&pack_name), |f| scaffold::slugify(f)));
     importer::ensure_empty_dir(&dir, force)?;
 
     let minecraft = importer::minecraft_of(&index)?;
     let loader_pairs = importer::loaders_of(&index);
     if loader_pairs.is_empty() {
-        bail!("this modpack does not name a loader, so there is nothing to build against");
+        bail!("{}", i18n::t("import-no-loader"));
     }
 
     let files = importer::files_of(&index)?;
@@ -2517,7 +2904,7 @@ async fn new_from_mrpack(
         cli,
         2,
         6,
-        &format!("looking {} files up on modrinth", files.len()),
+        &i18n::t_args("import-looking-up", &[("count", &files.len().to_string())]),
     );
     let client = Modrinth::new(api)?;
     let version_ids: Vec<String> = files.iter().map(|f| f.version_id.clone()).collect();
@@ -2542,18 +2929,22 @@ async fn new_from_mrpack(
     let projects = client.projects_by_ids(&project_ids).await?;
     detail(
         cli,
-        &format!(
-            "GET /v2/versions?ids=  {} ids, {} came back",
-            version_ids.len(),
-            versions.len()
+        &i18n::t_args(
+            "import-versions-api",
+            &[
+                ("sent", &version_ids.len().to_string()),
+                ("got", &versions.len().to_string()),
+            ],
         ),
     );
     detail(
         cli,
-        &format!(
-            "GET /v2/projects?ids=  {} ids, {} came back",
-            project_ids.len(),
-            projects.len()
+        &i18n::t_args(
+            "import-projects-api",
+            &[
+                ("sent", &project_ids.len().to_string()),
+                ("got", &projects.len().to_string()),
+            ],
         ),
     );
     let mut by_version: BTreeMap<&str, &crate::modrinth::MVersion> =
@@ -2566,25 +2957,31 @@ async fn new_from_mrpack(
     let by_project: BTreeMap<&str, &crate::modrinth::Project> =
         projects.iter().map(|p| (p.id.as_str(), p)).collect();
 
-    step(cli, 3, 6, "writing packages.json");
+    step(cli, 3, 6, &i18n::t("import-writing-packages"));
     let mut packages = Vec::new();
     for f in &files {
         let Some(v) = by_version.get(f.version_id.as_str()) else {
             detail(
                 cli,
-                &format!("{}  MISSING on modrinth, skipped", f.path),
+                &format!(
+                    "{}",
+                    i18n::t_args("import-missing", &[("path", f.path.as_str())])
+                ),
             );
             warn(
                 cli,
-                &format!("{} is gone from modrinth, skipping it", f.path),
+                &i18n::t_args("import-gone", &[("path", f.path.as_str())]),
             );
             continue;
         };
         let Some(pj) = by_project.get(v.project_id.as_str()) else {
-            detail(cli, &format!("{}  no project, skipped", f.path));
+            detail(
+                cli,
+                &i18n::t_args("import-no-project", &[("path", f.path.as_str())]),
+            );
             warn(
                 cli,
-                &format!("{} has no project on modrinth, skipping it", f.path),
+                &i18n::t_args("import-no-project-warn", &[("path", f.path.as_str())]),
             );
             continue;
         };
@@ -2609,8 +3006,8 @@ async fn new_from_mrpack(
         });
     }
 
-    let java = importer::java_of(&index)
-        .or_else(|| Some(loaders::java_for(&minecraft).to_string()));
+    let java =
+        importer::java_of(&index).or_else(|| Some(loaders::java_for(&minecraft).to_string()));
     let targets: Vec<Target> = loader_pairs
         .iter()
         .map(|(kind, version)| Target {
@@ -2649,19 +3046,34 @@ async fn new_from_mrpack(
     softwares.stamp();
     scaffold::write_project_files(&dir, &pack, &softwares, &pack_name, workflow)?;
 
-    step(cli, 4, 6, "pulling the overrides out");
+    step(cli, 4, 6, &i18n::t("import-pulling-overrides"));
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
     let written = importer::extract_overrides(mrpack, &dir, include_configs, &mut sources)?;
     if include_configs {
-        say(cli, &format!("  {written} override files, configs included"));
+        say(
+            cli,
+            &format!(
+                "  {}",
+                i18n::t_args(
+                    "import-overrides-with-configs",
+                    &[("count", &written.to_string())]
+                )
+            ),
+        );
     } else {
         say(
             cli,
-            &format!("  {written} override files, pass --include-configs for the configs too"),
+            &format!(
+                "  {}",
+                i18n::t_args(
+                    "import-overrides-without-configs",
+                    &[("count", &written.to_string())]
+                )
+            ),
         );
     }
 
-    step(cli, 5, 6, "locking every mod to the version the pack wanted");
+    step(cli, 5, 6, &i18n::t("import-lock-original"));
     let mut project = Project {
         dir: dir.clone(),
         manifest: pack,
@@ -2669,7 +3081,7 @@ async fn new_from_mrpack(
     };
     do_lock(cli, api, &mut project, None, None).await?;
 
-    step(cli, 6, 6, "wrapping up");
+    step(cli, 6, 6, &i18n::t("import-wrapping-up"));
     let committed = if git {
         Some(scaffold::init_repo(&dir)?)
     } else {
@@ -2680,12 +3092,7 @@ async fn new_from_mrpack(
     Ok(())
 }
 
-async fn add_ver(
-    cli: &Cli,
-    api: &str,
-    version: &str,
-    loaders: &[LoaderKind],
-) -> Result<()> {
+async fn add_ver(cli: &Cli, api: &str, version: &str, loaders: &[LoaderKind]) -> Result<()> {
     let mut p = load_project(cli)?;
     let kinds: Vec<LoaderKind> = if loaders.is_empty() {
         let mut seen: Vec<LoaderKind> = Vec::new();
@@ -2701,26 +3108,37 @@ async fn add_ver(
         loaders.to_vec()
     };
     if kinds.is_empty() {
-        bail!("this pack has no loader ehmodpack knows, pass --loader");
+        bail!("{}", i18n::t("addver-no-loader"));
     }
 
     let mut fresh = Vec::new();
     for k in &kinds {
-        if p
-            .softwares
+        if p.softwares
             .targets
             .iter()
             .any(|t| t.minecraft == version && t.loader.kind == k.as_str())
         {
-            bail!("{version}/{} is already a target", k.as_str());
+            bail!(
+                "{}",
+                i18n::t_args(
+                    "addver-already",
+                    &[("version", version), ("loader", k.as_str())]
+                )
+            );
         }
-        let lv = loaders::resolve(*k, version)
-            .await
-            .with_context(|| format!("could not resolve the {k} loader for {version}"))?;
+        let lv = loaders::resolve(*k, version).await.with_context(|| {
+            i18n::t_args(
+                "addver-resolve-failed",
+                &[("loader", &k.to_string()), ("version", version)],
+            )
+        })?;
         fresh.push(Target::new(version, *k, &lv));
     }
     for t in &fresh {
-        say(cli, &format!("adding {}", t.label()));
+        say(
+            cli,
+            &i18n::t_args("addver-adding", &[("label", t.label().as_str())]),
+        );
     }
 
     let lock = if Lock::exists(&p.dir) {
@@ -2731,12 +3149,7 @@ async fn add_ver(
     let client = Modrinth::new(api)?;
     p.softwares.targets.extend(fresh);
 
-    step(
-        cli,
-        1,
-        2,
-        "working out a version for every mod on every target",
-    );
+    step(cli, 1, 2, &i18n::t("step-versions-every-target"));
     let total = p.manifest.packages.len() * p.softwares.targets.len();
     let mut steps = crate::progress::Steps::new(total);
     let mut maps: Vec<BTreeMap<String, String>> = Vec::new();
@@ -2744,7 +3157,10 @@ async fn add_ver(
     for pkg in &p.manifest.packages {
         let mut map = BTreeMap::new();
         for t in &p.softwares.targets {
-            steps.at(map.len() + maps.iter().map(|m| m.len()).sum::<usize>() + 1, &pkg.key());
+            steps.at(
+                map.len() + maps.iter().map(|m| m.len()).sum::<usize>() + 1,
+                &pkg.key(),
+            );
             let key = format!("{}+{}", t.minecraft, t.loader.kind);
             match pick_version(pkg, &t.minecraft, lock.as_ref(), t, &client).await {
                 Some(v) => {
@@ -2766,18 +3182,21 @@ async fn add_ver(
     p.manifest.write(&p.dir)?;
     p.softwares.write(&p.dir)?;
 
-    step(cli, 2, 2, "locking");
+    step(cli, 2, 2, &i18n::t("step-locking"));
     do_lock(cli, api, &mut p, None, None).await?;
     say(
         cli,
-        &format!(
-            "now building for {}",
-            p.softwares
-                .targets
-                .iter()
-                .map(Targetish::label)
-                .collect::<Vec<_>>()
-                .join(", ")
+        &i18n::t_args(
+            "addver-now-building",
+            &[(
+                "list",
+                &p.softwares
+                    .targets
+                    .iter()
+                    .map(Targetish::label)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )],
         ),
     );
     Ok(())
@@ -2795,7 +3214,10 @@ async fn confirm_identity(
         Err(e) => {
             warn(
                 cli,
-                &format!("could not read the jar of {slug} to confirm its identity: {e:#}"),
+                &i18n::t_args(
+                    "identity-jar-failed",
+                    &[("slug", slug), ("error", &format!("{e:#}"))],
+                ),
             );
             return Ok(None);
         }
@@ -2813,8 +3235,15 @@ async fn confirm_identity(
         return Ok(Some(id));
     }
     bail!(
-        "{slug} now identifies as {id}, but this project is known to be {}",
-        known.join(", ")
+        "{}",
+        i18n::t_args(
+            "identity-changed",
+            &[
+                ("slug", slug),
+                ("id", id.as_str()),
+                ("known", &known.join(", ")),
+            ]
+        )
     )
 }
 
@@ -2840,17 +3269,20 @@ async fn update_cmd(
     };
     let client = Modrinth::new(api)?;
 
-    step(
-        cli,
-        1,
-        2,
-        "working out the newest version of every mod on every target",
-    );
+    step(cli, 1, 2, &i18n::t("step-newest-every-target"));
     let total: usize = p.manifest.packages.len() * targets.len();
     let mut steps = crate::progress::Steps::new(total);
     let mut n = 0usize;
-    let mut changes: Vec<(String, String, String, String, String, String, String, String)> =
-        Vec::new();
+    let mut changes: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    )> = Vec::new();
     let mut learn: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut bad: Vec<String> = Vec::new();
     let mut skipped: Vec<(String, String, String)> = Vec::new();
@@ -2866,21 +3298,24 @@ async fn update_cmd(
                 continue;
             }
             if p.manifest.packages[idx].is_locked() {
-                detail(cli, &format!("{slug} is locked, update ignores it"));
+                detail(
+                    cli,
+                    &i18n::t_args("update-locked", &[("slug", slug.as_str())]),
+                );
                 continue;
             }
             if p.manifest.packages[idx].is_skipped(&target.minecraft, &target.loader.kind) {
                 skipped.push((
                     slug.clone(),
                     target.label(),
-                    "thing was skipped".to_string(),
+                    i18n::t("update-skipped-reason"),
                 ));
                 continue;
             }
             let kind = p.manifest.packages[idx].kind;
             let known = p.manifest.packages[idx].ids.clone().unwrap_or_default();
-            let pinned = p.manifest.packages[idx]
-                .version_for(&target.minecraft, &target.loader.kind);
+            let pinned =
+                p.manifest.packages[idx].version_for(&target.minecraft, &target.loader.kind);
             let locked = lock.as_ref().and_then(|l| {
                 l.targets
                     .iter()
@@ -2901,7 +3336,11 @@ async fn update_cmd(
                 .unwrap_or_default();
 
             let Ok(project) = client.project(&slug).await else {
-                skipped.push((slug.clone(), target.label(), "not on modrinth".to_string()));
+                skipped.push((
+                    slug.clone(),
+                    target.label(),
+                    i18n::t("update-reason-not-modrinth"),
+                ));
                 continue;
             };
             let pid = project.id.clone();
@@ -2917,22 +3356,28 @@ async fn update_cmd(
                 skipped.push((
                     slug.clone(),
                     target.label(),
-                    "could not list versions".to_string(),
+                    i18n::t("update-reason-no-versions"),
                 ));
                 continue;
             };
             if list.is_empty() {
                 warn(
                     cli,
-                    &format!(
-                        "{slug} has nothing for {}, that target stays put",
-                        target.label()
+                    &i18n::t_args(
+                        "update-nothing-for-target",
+                        &[("slug", slug.as_str()), ("target", target.label().as_str())],
                     ),
                 );
                 skipped.push((
                     slug.clone(),
                     target.label(),
-                    format!("no {} build for {}", target.loader.kind, target.minecraft),
+                    i18n::t_args(
+                        "update-reason-no-build",
+                        &[
+                            ("loader", target.loader.kind.as_str()),
+                            ("mc", target.minecraft.as_str()),
+                        ],
+                    ),
                 ));
                 continue;
             }
@@ -2943,10 +3388,7 @@ async fn update_cmd(
             if was.as_deref() == Some(best.as_str()) {
                 continue;
             }
-            let Some(version) = list
-                .into_iter()
-                .find(|v| v.version_number == best)
-            else {
+            let Some(version) = list.into_iter().find(|v| v.version_number == best) else {
                 continue;
             };
             let new_vid = version.id.clone();
@@ -2991,18 +3433,22 @@ async fn update_cmd(
 
     println!();
     if changes.is_empty() && bad.is_empty() {
-        say(cli, "everything is already the newest it can be");
+        say(cli, &i18n::t("update-newest"));
     } else {
         let rows: Vec<Vec<String>> = changes
             .iter()
-            .map(|(s, _t, k, w, n, _p, _nv, _ov)| {
-                vec![s.clone(), k.clone(), w.clone(), n.clone()]
-            })
+            .map(|(s, _t, k, w, n, _p, _nv, _ov)| vec![s.clone(), k.clone(), w.clone(), n.clone()])
             .collect();
         if !rows.is_empty() {
             say(
                 cli,
-                &format!("{} update{} ready", rows.len(), if rows.len() == 1 { "" } else { "s" }),
+                &i18n::t_args(
+                    "update-ready",
+                    &[
+                        ("count", &rows.len().to_string()),
+                        ("suffix", if rows.len() == 1 { "" } else { "s" }),
+                    ],
+                ),
             );
             println!(
                 "{}",
@@ -3018,31 +3464,39 @@ async fn update_cmd(
     if !skipped.is_empty() {
         warn(
             cli,
-            &format!("{} target(s) could not be updated", skipped.len()),
+            &i18n::t_args(
+                "update-targets-failed",
+                &[("count", &skipped.len().to_string())],
+            ),
         );
         for (s, t, why) in &skipped {
-            detail(cli, &format!("{s}, {}: {why}", t));
+            detail(
+                cli,
+                &i18n::t_args(
+                    "update-skip-row",
+                    &[
+                        ("slug", s.as_str()),
+                        ("target", t.as_str()),
+                        ("why", why.as_str()),
+                    ],
+                ),
+            );
         }
     }
     if dry_run {
-        say(cli, "nothing was written");
+        say(cli, &i18n::t("update-nothing-written"));
         return Ok(());
     }
     if !bad.is_empty() {
         for line in &bad {
             error_line(cli, line);
         }
-        bail!("update was aborted before anything was written");
+        bail!("{}", i18n::t("update-aborted"));
     }
     if changes.is_empty() {
         return Ok(());
     }
-    step(
-        cli,
-        2,
-        2,
-        "writing the new pins and locking",
-    );
+    step(cli, 2, 2, &i18n::t("update-writing"));
     for (slug, _title, key, _was, now, _pid, _nv, _ov) in &changes {
         set_pin(&mut p.manifest, slug, key, now, single);
     }
@@ -3059,7 +3513,7 @@ async fn update_cmd(
         }
     }
     p.manifest.write(&p.dir)?;
-    say(cli, &format!("wrote {MANIFEST_FILE}"));
+    say(cli, &i18n::t_args("wrote-file", &[("file", MANIFEST_FILE)]));
     let mut p = load_project(cli)?;
     if mc.is_some() || loader.is_some() {
         for target in &targets {
@@ -3081,7 +3535,11 @@ async fn update_cmd(
         lines.push(String::new());
         for (_slug, title, _key, was, now, pid, new_vid, old_vid) in &changes {
             let project_url = format!("https://modrinth.com/project/{pid}");
-            let old_disp = if was == "*" { "*".to_string() } else { was.clone() };
+            let old_disp = if was == "*" {
+                "*".to_string()
+            } else {
+                was.clone()
+            };
             let old_link = if old_vid.is_empty() {
                 old_disp
             } else {
@@ -3101,9 +3559,7 @@ async fn update_cmd(
                 let old = lock
                     .targets
                     .iter()
-                    .find(|lt| {
-                        lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind
-                    })
+                    .find(|lt| lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind)
                     .map(|lt| lt.loader.version.clone());
                 if let Some(o) = old {
                     if o != t.loader.version {
@@ -3115,13 +3571,55 @@ async fn update_cmd(
                 }
             }
         }
-        append_changelog_toml(cli, &p.dir, &lines)?;
+        write_changelog_toml(cli, &p.dir, &lines)?;
     }
-    say(cli, "lockfile is fresh");
+    say(cli, &i18n::t("lock-fresh-simple"));
     Ok(())
 }
 
-fn append_changelog_toml(cli: &Cli, dir: &Path, lines: &[String]) -> Result<()> {
+fn changelog_block_date(line: &str) -> Option<&str> {
+    let line = line.trim();
+    let inner = line.strip_prefix("[[")?.strip_suffix("]]")?;
+    if inner.is_empty() { None } else { Some(inner) }
+}
+
+fn split_changelog(raw: &str) -> (String, Vec<(String, String)>) {
+    let mut preamble = String::new();
+    let mut blocks: Vec<(String, String)> = Vec::new();
+    let mut current: Option<(String, String)> = None;
+    for line in raw.split_inclusive('\n') {
+        if let Some(date) = changelog_block_date(line) {
+            if let Some(previous) = current.take() {
+                blocks.push(previous);
+            }
+            current = Some((date.to_string(), line.to_string()));
+        } else if let Some((_, body)) = current.as_mut() {
+            body.push_str(line);
+        } else {
+            preamble.push_str(line);
+        }
+    }
+    if let Some(last) = current {
+        blocks.push(last);
+    }
+    (preamble, blocks)
+}
+
+fn render_changelog(preamble: &str, blocks: &[(String, String)]) -> String {
+    let mut out = preamble.trim_end_matches('\n').to_string();
+    if !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    let rendered: Vec<&str> = blocks
+        .iter()
+        .map(|(_, block)| block.trim_end_matches('\n'))
+        .collect();
+    out.push_str(&rendered.join("\n\n"));
+    out.push('\n');
+    out
+}
+
+fn write_changelog_toml(cli: &Cli, dir: &Path, lines: &[String]) -> Result<()> {
     let now = time::OffsetDateTime::now_utc();
     let date = format!(
         "{}-{:02}-{:02}",
@@ -3129,19 +3627,25 @@ fn append_changelog_toml(cli: &Cli, dir: &Path, lines: &[String]) -> Result<()> 
         u8::from(now.month()),
         now.day()
     );
-    let mut out = std::fs::read_to_string(dir.join(crate::manifest::CHANGELOG_FILE))
-        .unwrap_or_default();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&format!(
+    let block = format!(
         "[[{date}]]\nchangelogtext = \"\"\"\n{}\n\"\"\"\n",
         lines.join("\n")
-    ));
+    );
+    let raw =
+        std::fs::read_to_string(dir.join(crate::manifest::CHANGELOG_FILE)).unwrap_or_default();
+    let (preamble, mut blocks) = split_changelog(&raw);
+    let insert_at = blocks
+        .iter()
+        .rposition(|(existing, _)| existing == &date)
+        .map(|i| i + 1)
+        .unwrap_or(blocks.len());
+    blocks.insert(insert_at, (date, block));
+    blocks.sort_by(|a, b| b.0.cmp(&a.0));
+    let out = render_changelog(&preamble, &blocks);
     crate::manifest::write_file(&dir.join(crate::manifest::CHANGELOG_FILE), &out)?;
     say(
         cli,
-        &format!("wrote {}", crate::manifest::CHANGELOG_FILE),
+        &i18n::t_args("wrote-file", &[("file", crate::manifest::CHANGELOG_FILE)]),
     );
     Ok(())
 }
@@ -3211,22 +3715,40 @@ async fn one_ver(cli: &Cli, api: &str, version: &str) -> Result<()> {
         .collect();
     if kept.is_empty() {
         bail!(
-            "no target for {version}, this pack has {}",
-            p.softwares
-                .targets
-                .iter()
-                .map(Targetish::label)
-                .collect::<Vec<_>>()
-                .join(", ")
+            "{}",
+            i18n::t_args(
+                "onever-no-target",
+                &[
+                    ("version", version),
+                    (
+                        "list",
+                        &p.softwares
+                            .targets
+                            .iter()
+                            .map(Targetish::label)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                ]
+            )
         );
     }
     if kept.len() == p.softwares.targets.len() {
-        say(cli, &format!("this pack is already only {version}"));
+        say(
+            cli,
+            &i18n::t_args("onever-already-only", &[("version", version)]),
+        );
     } else {
         let dropped = p.softwares.targets.len() - kept.len();
         say(
             cli,
-            &format!("dropping {dropped} target{}", if dropped == 1 { "" } else { "s" }),
+            &i18n::t_args(
+                "onever-dropping",
+                &[
+                    ("count", &dropped.to_string()),
+                    ("suffix", if dropped == 1 { "" } else { "s" }),
+                ],
+            ),
         );
     }
     p.softwares.targets = kept.clone();
@@ -3251,7 +3773,10 @@ async fn one_ver(cli: &Cli, api: &str, version: &str) -> Result<()> {
     p.softwares.write(&p.dir)?;
     do_lock(cli, api, &mut p, None, None).await?;
     for t in &kept {
-        say(cli, &format!("keeping {}", t.label()));
+        say(
+            cli,
+            &i18n::t_args("onever-keeping", &[("label", t.label().as_str())]),
+        );
     }
     Ok(())
 }
@@ -3261,19 +3786,16 @@ fn pick_workflow(cli: &Cli, given: Option<WorkflowKind>) -> Result<WorkflowKind>
         return Ok(w);
     }
     if !std::io::stdin().is_terminal() {
-        say(
-            cli,
-            "no --workflow given and no terminal, its workflow will be From Source by default",
-        );
+        say(cli, &i18n::t("workflow-default-source"));
         return Ok(WorkflowKind::Source);
     }
     let picked = inquire::Select::new(
-        "What kind of workflow you want for grabbing Eh's Modpack?",
-        vec!["From Source".to_string(), "From its Binaries".to_string()],
+        &i18n::t("workflow-prompt"),
+        vec![i18n::t("workflow-source"), i18n::t("workflow-binaries")],
     )
     .prompt()
     .map_err(ask_failed)?;
-    Ok(if picked.starts_with("From its B") {
+    Ok(if picked == i18n::t("workflow-binaries") {
         WorkflowKind::Binaries
     } else {
         WorkflowKind::Source
@@ -3283,7 +3805,7 @@ fn pick_workflow(cli: &Cli, given: Option<WorkflowKind>) -> Result<WorkflowKind>
 async fn ask_missing(cli: &Cli, api: &str, mut plan: NewPlan, git_flag: bool) -> Result<NewPlan> {
     if !std::io::stdin().is_terminal() {
         if plan.name.is_none() || plan.minecraft.is_empty() || plan.loaders.is_empty() {
-            bail!("this needs a terminal, pass --mc and --loader instead");
+            bail!("{}", i18n::t("needs-terminal"));
         }
         if git_flag {
             plan.git = Some(true);
@@ -3292,7 +3814,7 @@ async fn ask_missing(cli: &Cli, api: &str, mut plan: NewPlan, git_flag: bool) ->
         return Ok(plan);
     }
     if plan.name.is_none() {
-        plan.name = Some(ask("What's the modpack name")?);
+        plan.name = Some(ask(&i18n::t("ask-pack-name"))?);
     }
     if plan.minecraft.is_empty() {
         plan.minecraft = ask_versions(api).await?;
@@ -3302,7 +3824,7 @@ async fn ask_missing(cli: &Cli, api: &str, mut plan: NewPlan, git_flag: bool) ->
             .iter()
             .map(|k| k.as_str().to_string())
             .collect();
-        let picked = inquire::Select::new("Which Loader do you want", names)
+        let picked = inquire::Select::new(&i18n::t("ask-loader"), names)
             .prompt()
             .map_err(ask_failed)?;
         plan.loaders = vec![LoaderKind::parse(&picked).unwrap_or(LoaderKind::Fabric)];
@@ -3311,7 +3833,7 @@ async fn ask_missing(cli: &Cli, api: &str, mut plan: NewPlan, git_flag: bool) ->
         plan.workflow = Some(pick_workflow(cli, None)?);
     }
     if plan.git.is_none() {
-        plan.git = Some(git_flag || ask_yes_no("Do you want to be a git repo?"));
+        plan.git = Some(git_flag || ask_yes_no(&i18n::t("ask-git-repo")));
     }
     Ok(plan)
 }
@@ -3325,25 +3847,23 @@ async fn ask_versions(api: &str) -> Result<Vec<String>> {
         .filter(|t| t.version_type == "release")
         .map(|t| t.name)
         .filter(|n| {
-            !n.is_empty()
-                && n.starts_with('1')
-                && n.chars().all(|c| c.is_ascii_digit() || c == '.')
+            !n.is_empty() && n.starts_with('1') && n.chars().all(|c| c.is_ascii_digit() || c == '.')
         })
         .collect();
     if releases.is_empty() {
-        let raw = ask("What version(s) will it be, comma separated")?;
+        let raw = ask(&i18n::t("ask-versions-fallback"))?;
         let picked = split_versions(&raw);
         if picked.is_empty() {
-            bail!("pick at least one minecraft version");
+            bail!("{}", i18n::t("pick-one-version"));
         }
         return Ok(picked);
     }
-    let picked = inquire::MultiSelect::new("What version(s) will it be", releases)
+    let picked = inquire::MultiSelect::new(&i18n::t("ask-versions"), releases)
         .with_page_size(15)
         .prompt()
         .map_err(ask_failed)?;
     if picked.is_empty() {
-        bail!("pick at least one minecraft version");
+        bail!("{}", i18n::t("pick-one-version"));
     }
     Ok(picked)
 }
@@ -3392,6 +3912,61 @@ fn override_sources(p: &Project) -> Vec<(String, PathBuf)> {
     sources
 }
 
+async fn account_cmd(
+    cli: &Cli,
+    login: bool,
+    logout: bool,
+    show: bool,
+    client_id: Option<&str>,
+) -> Result<()> {
+    if login && logout {
+        bail!("{}", i18n::t("account-both-flags"));
+    }
+    if login {
+        let id = account::client_id(client_id)?;
+        let account = account::login(&id, |line| device_code_notice(cli, line)).await?;
+        say(
+            cli,
+            &i18n::t_args(
+                "account-signed-in",
+                &[
+                    ("name", account.name.as_str()),
+                    ("uuid", account.uuid.as_str()),
+                ],
+            ),
+        );
+        detail(cli, &i18n::t("account-refresh-keychain"));
+        return Ok(());
+    }
+    if logout {
+        if account::logout()? {
+            say(cli, &i18n::t("account-removed"));
+        } else {
+            say(cli, &i18n::t("account-none-saved"));
+        }
+        return Ok(());
+    }
+    let _ = show;
+    match account::saved()? {
+        Some(saved) => {
+            say(
+                cli,
+                &i18n::t_args(
+                    "account-signed-in",
+                    &[("name", saved.name.as_str()), ("uuid", saved.uuid.as_str())],
+                ),
+            );
+            detail(
+                cli,
+                &i18n::t_args("account-client-id", &[("id", saved.client_id.as_str())]),
+            );
+            detail(cli, &i18n::t("account-refresh-hidden"));
+        }
+        None => say(cli, &i18n::t("account-no-login")),
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn test_cmd(
     cli: &Cli,
@@ -3406,6 +3981,9 @@ async fn test_cmd(
     install_java_if_no_there: bool,
     vendor: Option<&str>,
     java_path: Option<&str>,
+    msa: bool,
+    msa_login: bool,
+    client_id: Option<&str>,
 ) -> Result<()> {
     let p = load_project(cli)?;
     let lock = if Lock::exists(&p.dir) {
@@ -3422,15 +4000,37 @@ async fn test_cmd(
     } else if let Some(want) = loader {
         vec![lock.target(None, Some(want))?.clone()]
     } else {
-        vec![lock
-            .targets
-            .first()
-            .context("this pack has no targets")?
-            .clone()]
+        vec![
+            lock.targets
+                .first()
+                .context(i18n::t("test-no-targets"))?
+                .clone(),
+        ]
     };
 
     let sources = override_sources(&p);
     let client = Modrinth::new(api)?;
+
+    let session = if msa_login {
+        let id = account::client_id(client_id)?;
+        let signed = account::login(&id, |line| device_code_notice(cli, line)).await?;
+        detail(
+            cli,
+            &i18n::t_args("test-signed-in", &[("name", signed.name.as_str())]),
+        );
+        Some(account::session(|line| device_code_notice(cli, line)).await?)
+    } else if msa {
+        Some(
+            account::session(|line| device_code_notice(cli, line))
+                .await
+                .context(i18n::t("test-msa-failed"))?,
+        )
+    } else {
+        None
+    };
+    if session.is_some() {
+        detail(cli, &i18n::t("test-using-msa"));
+    }
 
     for (index, target) in chosen.iter().enumerate() {
         let required_java = minecraft::required_java(&target.minecraft, target.java.as_deref());
@@ -3440,9 +4040,13 @@ async fn test_cmd(
         {
             detail(
                 cli,
-                &format!(
-                    "softwares.json says java {declared} but {} wants java {real}, using {real}",
-                    target.minecraft
+                &i18n::t_args(
+                    "java-mismatch",
+                    &[
+                        ("declared", &declared.to_string()),
+                        ("target", target.minecraft.as_str()),
+                        ("real", &real.to_string()),
+                    ],
                 ),
             );
         }
@@ -3450,7 +4054,7 @@ async fn test_cmd(
         if minecraft::java_of(&minecraft::java_candidates(), required_java).is_err() {
             let found = minecraft::all_javas();
             let wrong = if found.is_empty() {
-                "Java isn't installed!".to_string()
+                i18n::t("java-missing")
             } else {
                 let mut majors: Vec<String> = Vec::new();
                 for j in &found {
@@ -3459,25 +4063,36 @@ async fn test_cmd(
                         majors.push(m);
                     }
                 }
-                format!(
-                    "Found no java version for {required_java} in the system, only found {}",
-                    majors.join(", ")
+                i18n::t_args(
+                    "java-none-found",
+                    &[
+                        ("required", &required_java.to_string()),
+                        ("found", &majors.join(", ")),
+                    ],
                 )
             };
             println!();
-            println!("This project requires java {required_java} but {wrong}");
+            println!(
+                "{}",
+                i18n::t_args(
+                    "java-required",
+                    &[
+                        ("required", &required_java.to_string()),
+                        ("wrong", wrong.as_str()),
+                    ]
+                )
+            );
             println!();
             let ask = install_java_if_no_there
                 || (crate::progress::interactive()
-                    && inquire::Confirm::new(
-                        "Do you want to install the java version for the project? (installed to your system)",
-                    )
-                    .with_default(true)
-                    .prompt()
-                    .map_err(ask_failed)?);
+                    && inquire::Confirm::new(&i18n::t("java-install-prompt"))
+                        .with_default(true)
+                        .prompt()
+                        .map_err(ask_failed)?);
             if !ask {
                 bail!(
-                    "java {required_java} is needed to test this pack and nothing was installed"
+                    "{}",
+                    i18n::t_args("java-needed", &[("required", &required_java.to_string())])
                 );
             }
             let vendor_id = match vendor {
@@ -3488,7 +4103,7 @@ async fn test_cmd(
                         .iter()
                         .map(|(_, l)| l.to_string())
                         .collect();
-                    let picked = inquire::Select::new("Select Vendor:", labels)
+                    let picked = inquire::Select::new(&i18n::t("java-vendor-select"), labels)
                         .prompt()
                         .map_err(ask_failed)?;
                     crate::java_install::VENDORS
@@ -3500,26 +4115,25 @@ async fn test_cmd(
             };
             let add_path = match java_path {
                 Some(v) => v == "yes",
-                None => crate::progress::interactive()
-                    && inquire::Confirm::new("add to path's JAVA_HOME?")
-                        .with_default(false)
-                        .prompt()
-                        .map_err(ask_failed)?,
+                None => {
+                    crate::progress::interactive()
+                        && inquire::Confirm::new(&i18n::t("java-home-prompt"))
+                            .with_default(false)
+                            .prompt()
+                            .map_err(ask_failed)?
+                }
             };
             let fetch = crate::http::Http::new()?;
-            let home = crate::java_install::install(
-                &fetch,
-                vendor_id,
-                required_java,
-                |line| detail(cli, line),
-            )
+            let home = crate::java_install::install(&fetch, vendor_id, required_java, |line| {
+                detail(cli, line)
+            })
             .await?;
             match crate::java_install::set_java_home(&home, add_path) {
-                Ok(true) => detail(cli, "JAVA_HOME set and java added to your PATH"),
-                Ok(false) => detail(cli, "JAVA_HOME set"),
+                Ok(true) => detail(cli, &i18n::t("java-home-added")),
+                Ok(false) => detail(cli, &i18n::t("java-home-set")),
                 Err(e) => warn(
                     cli,
-                    &format!("java is installed but the environment was not set: {e:#}"),
+                    &i18n::t_args("java-env-failed", &[("error", &format!("{e:#}"))]),
                 ),
             }
             java_home = Some(home);
@@ -3531,137 +4145,217 @@ async fn test_cmd(
             cli,
             index as usize + 1,
             total * chosen.len(),
-            &format!("staging {}", target.label()),
+            &i18n::t_args("test-staging", &[("label", target.label().as_str())]),
         );
 
-        let copied = staging::copy_overrides(&sources, &dir)?;
-        detail(cli, &format!("{copied} override files"));
-
-        step(
-            cli,
-            index as usize + 2,
-            total * chosen.len(),
-            "downloading and verifying every file",
-        );
-        let staged = staging::download(&client, target, &dir, |line| detail(cli, line)).await?;
-        detail(
-            cli,
-            &format!(
-                "{} files, {}, all sha512 checked",
-                staged.downloaded,
-                staging::human(staged.bytes)
-            ),
-        );
-
-        step(
-            cli,
-            index as usize + 3,
-            total * chosen.len(),
-            "checking the mods actually fit together",
-        );
-        let conflicts = staging::scan_conflicts(
-            &dir,
-            &modmeta::Target {
-                minecraft: target.minecraft.clone(),
-                java: target.java.clone().unwrap_or_default(),
-                loader: target.loader.version.clone(),
-            },
-        );
-        if !conflicts.warnings.is_empty() {
-            detail(cli, &format!("{} soft note(s)", conflicts.warnings.len()));
-        }
-        if conflicts.errors.is_empty() {
-            detail(cli, "no dependency conflicts");
-        } else {
-            println!();
-            say(
+        let outcome: Result<()> = async {
+            let copied = staging::copy_overrides(&sources, &dir)?;
+            detail(
                 cli,
-                &format!(
-                    "{} conflict{} found",
-                    conflicts.errors.len(),
-                    if conflicts.errors.len() == 1 { "" } else { "s" }
+                &i18n::t_args("test-override-files", &[("count", &copied.to_string())]),
+            );
+
+            step(
+                cli,
+                index as usize + 2,
+                total * chosen.len(),
+                &i18n::t("test-downloading"),
+            );
+            let staged = staging::download(&client, target, &dir, |line| detail(cli, line)).await?;
+            detail(
+                cli,
+                &i18n::t_args(
+                    "test-files-checked",
+                    &[
+                        ("count", &staged.downloaded.to_string()),
+                        ("bytes", staging::human(staged.bytes).as_str()),
+                    ],
                 ),
             );
-            for c in &conflicts.errors {
-                error_line(
+
+            step(
+                cli,
+                index as usize + 3,
+                total * chosen.len(),
+                &i18n::t("test-conflicts"),
+            );
+            let conflicts = staging::scan_conflicts(
+                &dir,
+                &modmeta::Target {
+                    minecraft: target.minecraft.clone(),
+                    java: target.java.clone().unwrap_or_default(),
+                    loader: target.loader.version.clone(),
+                },
+            );
+            if !conflicts.warnings.is_empty() {
+                detail(
                     cli,
-                    &format!(
-                        "  {} {} {}, wanted {}, found {}",
-                        c.offender, c.kind, c.other, c.wanted, c.found
+                    &i18n::t_args(
+                        "test-soft-notes",
+                        &[("count", &conflicts.warnings.len().to_string())],
                     ),
                 );
             }
-            let go = inquire::Confirm::new("launch it anyway?")
-                .with_default(false)
-                .prompt()
-                .map_err(ask_failed)?;
-            if !go {
-                say(cli, "stopping before the game starts");
-                if keep {
-                    say(cli, &format!("kept {}", dir.display()));
-                } else {
-                    let _ = staging::wipe(&dir);
+            if conflicts.errors.is_empty() {
+                detail(cli, &i18n::t("test-no-conflicts"));
+            } else {
+                println!();
+                say(
+                    cli,
+                    &i18n::t_args(
+                        if conflicts.errors.len() == 1 {
+                            "test-conflict-one"
+                        } else {
+                            "test-conflict-many"
+                        },
+                        &[("count", &conflicts.errors.len().to_string())],
+                    ),
+                );
+                for c in &conflicts.errors {
+                    error_line(
+                        cli,
+                        &format!(
+                            "  {}",
+                            i18n::t_args(
+                                "test-conflict-row",
+                                &[
+                                    ("offender", c.offender.as_str()),
+                                    ("kind", c.kind),
+                                    ("other", c.other.as_str()),
+                                    ("wanted", c.wanted.as_str()),
+                                    ("found", c.found.as_str()),
+                                ],
+                            )
+                        ),
+                    );
                 }
-                return Ok(());
+                let go = inquire::Confirm::new(&i18n::t("test-launch-anyway"))
+                    .with_default(false)
+                    .prompt()
+                    .map_err(ask_failed)?;
+                if !go {
+                    say(cli, &i18n::t("test-stopping"));
+                    if keep {
+                        say(
+                            cli,
+                            &i18n::t_args("test-kept", &[("path", &dir.display().to_string())]),
+                        );
+                    } else {
+                        let _ = staging::wipe(&dir);
+                    }
+                    return Ok(());
+                }
+                println!();
             }
-            println!();
+
+            step(
+                cli,
+                index as usize + 4,
+                total * chosen.len(),
+                &i18n::t("test-install-loader"),
+            );
+            let http = crate::http::Http::new()?;
+            let base = dir.join(".minecraft-ehmodpack");
+            let natives =
+                minecraft::install(&http, &base, target, java_home, |line| detail(cli, line))
+                    .await?;
+            detail(
+                cli,
+                &i18n::t_args(
+                    "test-runtime",
+                    &[
+                        ("mc", target.minecraft.as_str()),
+                        ("loader", target.loader.kind.as_str()),
+                        ("version", target.loader.version.as_str()),
+                        ("java", &natives.java_major.to_string()),
+                        ("libs", &natives.libraries.to_string()),
+                        ("assets", &natives.assets.to_string()),
+                    ],
+                ),
+            );
+
+            step(
+                cli,
+                index as usize + 4,
+                total * chosen.len(),
+                &i18n::t("test-start-game"),
+            );
+            let mut child = minecraft::spawn(&natives, &dir, session.as_ref(), &target.minecraft)?;
+            detail(
+                cli,
+                &i18n::t_args("test-pid", &[("pid", &child.id().to_string())]),
+            );
+
+            match how {
+                Launcher::None => {
+                    say(
+                        cli,
+                        &i18n::t_args("test-instance-at", &[("path", &dir.display().to_string())]),
+                    );
+                    staging::wait_for_enter(&format!("{} ", i18n::t("test-enter-stop")));
+                }
+                _ => {
+                    let _ = child.wait();
+                }
+            }
+            let _ = (launch, profile);
+            Ok(())
         }
+        .await;
 
-        step(
-            cli,
-            index as usize + 4,
-            total * chosen.len(),
-            "installing the loader and the game itself",
-        );
-        let http = crate::http::Http::new()?;
-        let base = dir.join(".minecraft-ehmodpack");
-        let natives = minecraft::install(&http, &base, target, java_home, |line| detail(cli, line))
-            .await?;
-        detail(
-            cli,
-            &format!(
-                "mc {}  {} {}  java {}  libs {}  assets {}",
-                target.minecraft,
-                target.loader.kind,
-                target.loader.version,
-                natives.java_major,
-                natives.libraries,
-                natives.assets
-            ),
-        );
-
-        step(
-            cli,
-            index as usize + 4,
-            total * chosen.len(),
-            "starting the game",
-        );
-        let mut child = minecraft::spawn(&natives, &dir)?;
-        detail(cli, &format!("pid {}", child.id()));
-
-        match how {
-            Launcher::None => {
-                say(cli, &format!("instance is at {}", dir.display()));
-                staging::wait_for_enter("press enter to stop the game and clean up: ");
+        if let Err(error) = outcome {
+            if keep {
+                warn(
+                    cli,
+                    &i18n::t_args(
+                        "test-kept-failure",
+                        &[
+                            ("path", &dir.display().to_string()),
+                            ("error", &error.to_string()),
+                        ],
+                    ),
+                );
+            } else if let Err(wipe_error) = staging::wipe(&dir) {
+                warn(
+                    cli,
+                    &i18n::t_args(
+                        "test-delete-failed",
+                        &[
+                            ("path", &dir.display().to_string()),
+                            ("error", &wipe_error.to_string()),
+                        ],
+                    ),
+                );
+            } else {
+                detail(cli, &i18n::t("test-cleaned-failure"));
             }
-            _ => {
-                let _ = child.wait();
-            }
+            return Err(error);
         }
-        let _ = (launch, profile);
 
         step(
             cli,
             index as usize + 5,
             total * chosen.len(),
-            "cleaning up",
+            &i18n::t("test-cleanup"),
         );
         if keep {
-            say(cli, &format!("kept {}", dir.display()));
+            say(
+                cli,
+                &i18n::t_args("test-kept", &[("path", &dir.display().to_string())]),
+            );
         } else if let Err(e) = staging::wipe(&dir) {
-            warn(cli, &format!("could not delete {}: {e}", dir.display()));
+            warn(
+                cli,
+                &i18n::t_args(
+                    "test-delete-failed",
+                    &[
+                        ("path", &dir.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                ),
+            );
         } else {
-            detail(cli, "temporary instance deleted");
+            detail(cli, &i18n::t("test-deleted"));
         }
     }
     Ok(())
@@ -3674,7 +4368,7 @@ async fn fetch_and_check(
     let url = pkg
         .downloads
         .first()
-        .with_context(|| format!("{} has no download url", pkg.project))?;
+        .with_context(|| i18n::t_args("fetch-no-url", &[("project", pkg.project.as_str())]))?;
     if out.is_file() {
         let body = std::fs::read(out)?;
         if crate::staging::check_sha512(&pkg.project, &body, &pkg.hashes.sha512).is_ok() {
@@ -3697,10 +4391,7 @@ fn norm(text: &str) -> String {
         .collect()
 }
 
-fn matches_entry(
-    entry: &str,
-    candidates: &[(String, String, String, String)],
-) -> Option<usize> {
+fn matches_entry(entry: &str, candidates: &[(String, String, String, String)]) -> Option<usize> {
     let bare = entry.trim_start_matches("file/");
     if let Some(i) = candidates
         .iter()
@@ -3788,7 +4479,7 @@ async fn sync_pack_active(
             let (_, _, slug, _) = &candidates[i];
             on.insert(slug.clone());
             matched_files.insert(bare);
-            rows.push(vec![slug.clone(), entry.clone(), "on, matched by name".to_string()]);
+            rows.push(vec![slug.clone(), entry.clone(), i18n::t("sync-on-name")]);
             continue;
         }
         let here = on_disk.iter().find(|(n, _)| *n == bare);
@@ -3798,11 +4489,7 @@ async fn sync_pack_active(
                 let (_, _, slug, _) = &candidates[i];
                 on.insert(slug.clone());
                 matched_files.insert(bare);
-                rows.push(vec![
-                    slug.clone(),
-                    entry.clone(),
-                    "on, matched the lock by sha".to_string(),
-                ]);
+                rows.push(vec![slug.clone(), entry.clone(), i18n::t("sync-on-sha")]);
                 continue;
             }
         }
@@ -3821,29 +4508,23 @@ async fn sync_pack_active(
                 rows.push(vec![
                     slug,
                     v.version_number.clone(),
-                    "on, matched modrinth by hash".to_string(),
+                    i18n::t("sync-on-hash"),
                 ]);
             }
             None => rows.push(vec![
-                "(not on modrinth)".to_string(),
+                i18n::t("sync-not-on-modrinth"),
                 entry.clone(),
                 if here.is_some() {
-                    "on, local file"
+                    i18n::t("sync-on-local")
                 } else {
-                    "on, but there is nothing here to check it against"
-                }
-                .to_string(),
+                    i18n::t("sync-on-unchecked")
+                },
             ]),
         }
     }
 
     if !no_download {
-        step(
-            cli,
-            1,
-            2,
-            "downloading the active packs and checking them against the lockfile",
-        );
+        step(cli, 1, 2, &i18n::t("sync-step-download"));
         let dest = p.dir.join(&p.manifest.overrides).join("resourcepacks");
         let mut steps = crate::progress::Steps::new(on.len());
         let mut n = 0usize;
@@ -3861,7 +4542,14 @@ async fn sync_pack_active(
                 let file = pkg.path.rsplit('/').next().unwrap_or(&pkg.path).to_string();
                 let out = dest.join(&file);
                 if let Err(e) = fetch_and_check(&client, pkg, &out).await {
-                    bad.push(format!("{} {file}: {e:#}", pkg.project));
+                    bad.push(i18n::t_args(
+                        "sync-fetch-failed",
+                        &[
+                            ("project", pkg.project.as_str()),
+                            ("file", file.as_str()),
+                            ("error", &format!("{e:#}")),
+                        ],
+                    ));
                     continue;
                 }
                 if pkg.kind == PkgType::Resourcepack {
@@ -3870,9 +4558,12 @@ async fn sync_pack_active(
                             .map(|b| crate::mcmeta::zip_supports(&b, format))
                             .unwrap_or(false);
                         if !ok {
-                            bad.push(format!(
-                                "{} has no way to verify this is for {}!",
-                                pkg.project, target.minecraft
+                            bad.push(i18n::t_args(
+                                "sync-no-verify",
+                                &[
+                                    ("project", pkg.project.as_str()),
+                                    ("mc", target.minecraft.as_str()),
+                                ],
                             ));
                             continue;
                         }
@@ -3887,16 +4578,19 @@ async fn sync_pack_active(
             warn(cli, line);
         }
         if bad.is_empty() {
-            say(cli, &format!("{n} active packs fetched and hash checked"));
+            say(
+                cli,
+                &i18n::t_args("sync-fetched", &[("count", &n.to_string())]),
+            );
         }
     }
 
     for (name, _) in &on_disk {
         if !matched_files.contains(name) {
             rows.push(vec![
-                "(not on modrinth)".to_string(),
+                i18n::t("sync-not-on-modrinth"),
                 name.clone(),
-                "off".to_string(),
+                i18n::t("sync-off"),
             ]);
         }
     }
@@ -3905,7 +4599,7 @@ async fn sync_pack_active(
             rows.push(vec![
                 slug.clone(),
                 file.clone(),
-                "off, options.txt did not list it".to_string(),
+                i18n::t("sync-off-unlisted"),
             ]);
         }
     }
@@ -3930,7 +4624,11 @@ async fn sync_pack_active(
         for pkg in &mut target.packages {
             let is_pack = matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader);
             let want = is_pack && on.contains(&pkg.project);
-            let next = if want { Some(RpPosition::default()) } else { None };
+            let next = if want {
+                Some(RpPosition::default())
+            } else {
+                None
+            };
             if pkg.position != next {
                 pkg.position = next;
                 if want {
@@ -3945,10 +4643,7 @@ async fn sync_pack_active(
     lock.manifest_hash = p.manifest.fingerprint();
     lock.write(&p.dir)?;
 
-    let mut generated: Vec<String> = on_disk
-        .iter()
-        .map(|(n, _)| n.clone())
-        .collect();
+    let mut generated: Vec<String> = on_disk.iter().map(|(n, _)| n.clone()).collect();
     for (name, _) in &on_disk {
         if !generated.iter().any(|g| g == name) {
             generated.push(name.clone());
@@ -3966,7 +4661,10 @@ async fn sync_pack_active(
     println!();
     say(
         cli,
-        &format!("read the enabled packs out of {}", options_path.display()),
+        &i18n::t_args(
+            "sync-read-options",
+            &[("path", &options_path.display().to_string())],
+        ),
     );
     println!(
         "{}",
@@ -3980,31 +4678,49 @@ async fn sync_pack_active(
     println!();
     say(
         cli,
-        &format!(
-            "{changed} activ{} changed",
-            if changed == 1 { "e" } else { "es" }
+        &i18n::t_args(
+            "sync-changed",
+            &[
+                ("count", &changed.to_string()),
+                ("suffix", if changed == 1 { "e" } else { "es" }),
+            ],
         ),
     );
     say(
         cli,
-        &format!(
-            "on: {}",
-            if on.is_empty() {
-                "nothing".to_string()
-            } else {
-                on.iter().cloned().collect::<Vec<_>>().join(", ")
-            }
+        &i18n::t_args(
+            "sync-on-list",
+            &[(
+                "list",
+                &if on.is_empty() {
+                    i18n::t("sync-nothing")
+                } else {
+                    on.iter().cloned().collect::<Vec<_>>().join(", ")
+                },
+            )],
         ),
     );
-    say(cli, &format!("{MANIFEST_FILE} and {LOCK_FILE} are up to date"));
     say(
         cli,
-        &format!("wrote {} too", options_path.display()),
+        &i18n::t_args(
+            "sync-up-to-date",
+            &[("manifest", MANIFEST_FILE), ("lock", LOCK_FILE)],
+        ),
     );
-    for line in canonical.lines().filter(|l| l.starts_with("resourcePacks:")) {
+    say(
+        cli,
+        &i18n::t_args(
+            "sync-wrote-options",
+            &[("path", &options_path.display().to_string())],
+        ),
+    );
+    for line in canonical
+        .lines()
+        .filter(|l| l.starts_with("resourcePacks:"))
+    {
         println!("  {line}");
     }
-    say(cli, "build still rewrites it per target inside each .mrpack");
+    say(cli, &i18n::t("sync-rewrites"));
     Ok(())
 }
 
@@ -4029,7 +4745,7 @@ async fn fix_loader(
         None
     };
     if lock.is_none() {
-        say(cli, "nothing is locked yet, working off packages.json alone");
+        say(cli, &i18n::t("fix-no-lock"));
     }
     let client = Modrinth::new(api)?;
 
@@ -4049,8 +4765,8 @@ async fn fix_loader(
             if slug.is_empty() {
                 continue;
             }
-            let pinned = p.manifest.packages[idx]
-                .version_for(&target.minecraft, &target.loader.kind);
+            let pinned =
+                p.manifest.packages[idx].version_for(&target.minecraft, &target.loader.kind);
             let locked = lock.as_ref().and_then(|l| {
                 l.targets
                     .iter()
@@ -4070,13 +4786,13 @@ async fn fix_loader(
             if p.manifest.packages[idx].is_skipped(&target.minecraft, &target.loader.kind) {
                 rows.push(vec![
                     slug,
-                    "skipped".to_string(),
-                    "not on this target".to_string(),
+                    i18n::t("fix-skipped"),
+                    i18n::t("fix-not-target"),
                 ]);
                 continue;
             }
             let Ok(project) = client.project(&slug).await else {
-                rows.push(vec![slug, "?".to_string(), "not on modrinth".to_string()]);
+                rows.push(vec![slug, "?".to_string(), i18n::t("fix-not-modrinth")]);
                 continue;
             };
             let is_mod = p.manifest.packages[idx].kind == PkgType::Mod;
@@ -4085,17 +4801,30 @@ async fn fix_loader(
                 .versions(&project, Some(&target.minecraft), &want)
                 .await
             else {
-                rows.push(vec![slug, "?".to_string(), "could not list versions".to_string()]);
+                rows.push(vec![
+                    slug,
+                    "?".to_string(),
+                    i18n::t("update-reason-no-versions"),
+                ]);
                 continue;
             };
             if list.is_empty() {
                 rows.push(vec![
                     slug,
-                    locked.clone().or(pinned.clone()).unwrap_or_else(|| "*".to_string()),
+                    locked
+                        .clone()
+                        .or(pinned.clone())
+                        .unwrap_or_else(|| "*".to_string()),
                     if is_mod {
-                        format!("no {} build for {}", target.loader.kind, target.minecraft)
+                        i18n::t_args(
+                            "update-reason-no-build",
+                            &[
+                                ("loader", target.loader.kind.as_str()),
+                                ("mc", target.minecraft.as_str()),
+                            ],
+                        )
                     } else {
-                        format!("no build for {}", target.minecraft)
+                        i18n::t_args("fix-no-build", &[("mc", target.minecraft.as_str())])
                     },
                 ]);
                 continue;
@@ -4131,14 +4860,16 @@ async fn fix_loader(
     println!();
     say(
         cli,
-        &format!(
-            "{} version{} did not fit the loader",
-            changed,
-            if changed == 1 { "" } else { "s" }
+        &i18n::t_args(
+            "fix-versions-count",
+            &[
+                ("count", &changed.to_string()),
+                ("suffix", if changed == 1 { "" } else { "s" }),
+            ],
         ),
     );
     if rows.is_empty() {
-        say(cli, "everything already matches its target loader");
+        say(cli, &i18n::t("fix-matches-loader"));
     } else {
         println!(
             "{}",
@@ -4151,15 +4882,15 @@ async fn fix_loader(
         );
     }
     if dry_run {
-        say(cli, "nothing was written");
+        say(cli, &i18n::t("update-nothing-written"));
         return Ok(());
     }
     if changed == 0 {
         return Ok(());
     }
     p.manifest.write(&p.dir)?;
-    say(cli, &format!("wrote {MANIFEST_FILE}"));
-    let go = inquire::Confirm::new("lock the targets that changed?")
+    say(cli, &i18n::t_args("wrote-file", &[("file", MANIFEST_FILE)]));
+    let go = inquire::Confirm::new(&i18n::t("fix-lock-confirm"))
         .with_default(true)
         .prompt()
         .map_err(ask_failed)?;
@@ -4204,7 +4935,7 @@ async fn verify_cmd(
     let lock = if Lock::exists(&p.dir) {
         Lock::load(&p.dir)?
     } else {
-        say(cli, "nothing is locked yet, run `ehmodpack lock` first");
+        say(cli, &i18n::t("verify-no-lock-first"));
         return Ok(());
     };
     let targets: Vec<LockedTarget> = if all || (mc.is_none() && loader.is_none()) {
@@ -4234,9 +4965,12 @@ async fn verify_cmd(
                     rows.push(vec![
                         pkg.project.clone(),
                         pkg.version_number.clone(),
-                        "no download url".to_string(),
+                        i18n::t("verify-no-url"),
                     ]);
-                    bad.push(format!("{} has no download url", pkg.project));
+                    bad.push(i18n::t_args(
+                        "verify-has-no-url",
+                        &[("project", pkg.project.as_str())],
+                    ));
                     continue;
                 }
             };
@@ -4246,13 +4980,16 @@ async fn verify_cmd(
                     rows.push(vec![
                         pkg.project.clone(),
                         pkg.version_number.clone(),
-                        format!("could not download: {e}"),
+                        i18n::t_args("verify-download-failed", &[("error", &e.to_string())]),
                     ]);
-                    bad.push(format!("{} could not be downloaded: {e}", pkg.project));
+                    bad.push(i18n::t_args(
+                        "verify-could-not-download",
+                        &[("project", pkg.project.as_str()), ("error", &e.to_string())],
+                    ));
                     if !keep_going {
                         steps.finish();
                         error_line(cli, &format!("  {e}"));
-                        bail!("stopped at the first failure, pass --keep-going to carry on");
+                        bail!("{}", i18n::t("verify-stop-first"));
                     }
                     continue;
                 }
@@ -4263,19 +5000,23 @@ async fn verify_cmd(
                     ids.entry(meta.id.to_ascii_lowercase())
                         .or_insert_with(|| pkg.project.clone());
                     if pkg.kind == PkgType::Mod {
-                        let known = p.manifest.packages.iter().find(|m| {
-                            m.key().eq_ignore_ascii_case(&pkg.project)
-                        });
+                        let known = p
+                            .manifest
+                            .packages
+                            .iter()
+                            .find(|m| m.key().eq_ignore_ascii_case(&pkg.project));
                         if let Some(pkg_known) = known {
                             if let Some(list) = &pkg_known.ids {
                                 if !list.is_empty()
                                     && !list.iter().any(|k| k.eq_ignore_ascii_case(&meta.id))
                                 {
-                                    wrong_id.push(format!(
-                                        "{} identifies as {} but this project is known to be {}",
-                                        pkg.project,
-                                        meta.id,
-                                        list.join(", ")
+                                    wrong_id.push(i18n::t_args(
+                                        "verify-wrong-id",
+                                        &[
+                                            ("project", pkg.project.as_str()),
+                                            ("id", meta.id.as_str()),
+                                            ("known", &list.join(", ")),
+                                        ],
                                     ));
                                 }
                             }
@@ -4296,12 +5037,14 @@ async fn verify_cmd(
                             label: target.label(),
                             loader: target.loader.kind.clone(),
                             version_number: pkg.version_number.clone(),
-                            detail: format!(
-                                "{} was downloaded for {} for {} when this is a {} pack",
-                                pkg.project,
-                                pkg.version_number,
-                                loaders.join("/"),
-                                target.loader.kind
+                            detail: i18n::t_args(
+                                "verify-wrong-loader",
+                                &[
+                                    ("project", pkg.project.as_str()),
+                                    ("version", pkg.version_number.as_str()),
+                                    ("loaders", &loaders.join("/")),
+                                    ("loader", target.loader.kind.as_str()),
+                                ],
                             ),
                         });
                     }
@@ -4312,11 +5055,13 @@ async fn verify_cmd(
                             label: target.label(),
                             loader: target.loader.kind.clone(),
                             version_number: pkg.version_number.clone(),
-                            detail: format!(
-                                "The version of minecraft for {} was downloaded incorrectly ({} does not support {})",
-                                pkg.project,
-                                pkg.version_number,
-                                target.minecraft
+                            detail: i18n::t_args(
+                                "verify-wrong-mc",
+                                &[
+                                    ("project", pkg.project.as_str()),
+                                    ("version", pkg.version_number.as_str()),
+                                    ("mc", target.minecraft.as_str()),
+                                ],
                             ),
                         });
                     }
@@ -4325,9 +5070,12 @@ async fn verify_cmd(
             if pkg.kind == PkgType::Resourcepack {
                 if let Some(format) = build::pack_format_for(&target.minecraft) {
                     if !crate::mcmeta::zip_supports(&body, format) {
-                        let msg = format!(
-                            "{} has no way to verify this is for {}!",
-                            pkg.project, target.minecraft
+                        let msg = i18n::t_args(
+                            "sync-no-verify",
+                            &[
+                                ("project", pkg.project.as_str()),
+                                ("mc", target.minecraft.as_str()),
+                            ],
                         );
                         rows.push(vec![
                             pkg.project.clone(),
@@ -4338,18 +5086,13 @@ async fn verify_cmd(
                         if !keep_going {
                             steps.finish();
                             error_line(cli, &msg);
-                            bail!("stopped at the first failure, pass --keep-going to carry on");
+                            bail!("{}", i18n::t("verify-stop-first"));
                         }
                         continue;
                     }
                 }
             }
-            match staging::verify(
-                &pkg.project,
-                &body,
-                &pkg.hashes.sha1,
-                &pkg.hashes.sha512,
-            ) {
+            match staging::verify(&pkg.project, &body, &pkg.hashes.sha1, &pkg.hashes.sha512) {
                 Ok(()) => rows.push(vec![
                     pkg.project.clone(),
                     pkg.version_number.clone(),
@@ -4365,7 +5108,7 @@ async fn verify_cmd(
                     if !keep_going {
                         steps.finish();
                         error_line(cli, &format!("  {e}"));
-                        bail!("stopped at the first failure, pass --keep-going to carry on");
+                        bail!("{}", i18n::t("verify-stop-first"));
                     }
                 }
             }
@@ -4374,7 +5117,7 @@ async fn verify_cmd(
     steps.finish();
 
     println!();
-    say(cli, "checked every file against its hashes");
+    say(cli, &i18n::t("verify-checked-hashes"));
     println!(
         "{}",
         table(
@@ -4389,16 +5132,18 @@ async fn verify_cmd(
         println!();
         say(
             cli,
-            &format!(
-                "{} mod{} changed identity, nothing is auto-fixed for those",
-                wrong_id.len(),
-                if wrong_id.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "verify-identity-count",
+                &[
+                    ("count", &wrong_id.len().to_string()),
+                    ("suffix", if wrong_id.len() == 1 { "" } else { "s" }),
+                ],
             ),
         );
         for line in &wrong_id {
             error_line(cli, line);
         }
-        bail!("some mods changed identity, update packages.json by hand before continuing");
+        bail!("{}", i18n::t("verify-identity-bail"));
     }
 
     let mut per_target: Vec<(String, Vec<modmeta::ModMeta>)> = Vec::new();
@@ -4447,16 +5192,27 @@ async fn verify_cmd(
         println!();
         notice(
             cli,
-            &format!(
-                "{} soft conflict{} (Those are warnings!)",
-                warnings.len(),
-                if warnings.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "verify-soft-conflicts",
+                &[
+                    ("count", &warnings.len().to_string()),
+                    ("suffix", if warnings.len() == 1 { "" } else { "s" }),
+                ],
             ),
         );
         for (label, c) in &warnings {
             println!(
-                "  {label}: {} breaks {} (wants {}), found {}",
-                c.offender, c.other, c.wanted, c.found
+                "  {}",
+                i18n::t_args(
+                    "verify-soft-row",
+                    &[
+                        ("label", label.as_str()),
+                        ("offender", c.offender.as_str()),
+                        ("other", c.other.as_str()),
+                        ("wanted", c.wanted.as_str()),
+                        ("found", c.found.as_str()),
+                    ],
+                )
             );
         }
     }
@@ -4465,18 +5221,30 @@ async fn verify_cmd(
         println!();
         say(
             cli,
-            &format!(
-                "{} real conflict{}",
-                errors.len(),
-                if errors.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "verify-real-conflicts",
+                &[
+                    ("count", &errors.len().to_string()),
+                    ("suffix", if errors.len() == 1 { "" } else { "s" }),
+                ],
             ),
         );
         for (label, c) in &errors {
             error_line(
                 cli,
                 &format!(
-                    "  {label}: {} {} {}, wanted {}, found {}",
-                    c.offender, c.kind, c.other, c.wanted, c.found
+                    "  {}",
+                    i18n::t_args(
+                        "verify-real-row",
+                        &[
+                            ("label", label.as_str()),
+                            ("offender", c.offender.as_str()),
+                            ("kind", c.kind),
+                            ("other", c.other.as_str()),
+                            ("wanted", c.wanted.as_str()),
+                            ("found", c.found.as_str()),
+                        ],
+                    )
                 ),
             );
         }
@@ -4486,26 +5254,40 @@ async fn verify_cmd(
         println!();
         say(
             cli,
-            &format!(
-                "{} version conflict{}",
-                version_conflicts.len(),
-                if version_conflicts.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "verify-version-conflicts",
+                &[
+                    ("count", &version_conflicts.len().to_string()),
+                    (
+                        "suffix",
+                        if version_conflicts.len() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                    ),
+                ],
             ),
         );
         for v in &version_conflicts {
-            error_line(cli, &format!("  {}: {}", v.label, v.detail));
+            error_line(
+                cli,
+                &format!(
+                    "  {}",
+                    i18n::t_args(
+                        "verify-version-row",
+                        &[("label", v.label.as_str()), ("detail", v.detail.as_str())]
+                    )
+                ),
+            );
         }
     }
 
-    if bad.is_empty()
-        && errors.is_empty()
-        && warnings.is_empty()
-        && version_conflicts.is_empty()
-    {
+    if bad.is_empty() && errors.is_empty() && warnings.is_empty() && version_conflicts.is_empty() {
         println!();
         say(
             cli,
-            &format!("{n} files, every hash matched and the mods fit together"),
+            &i18n::t_args("verify-all-ok", &[("count", &n.to_string())]),
         );
         return Ok(());
     }
@@ -4529,41 +5311,48 @@ async fn verify_cmd(
     }
 
     if !std::io::stdin().is_terminal() {
-        say(
-            cli,
-            "Hi! you're NOT running it in a terminal, so you cannot do anything, run it on an actual terminal if you want to continue",
-        );
+        say(cli, &i18n::t("verify-no-terminal"));
         let hard = bad.len() + errors.len() + version_conflicts.len();
         if hard > 0 {
-            bail!("{hard} problem(s) still need fixing and there is no terminal to ask about it");
+            bail!(
+                "{}",
+                i18n::t_args("verify-hard-no-terminal", &[("count", &hard.to_string())])
+            );
         }
         return Ok(());
     }
 
-    let fix = inquire::Confirm::new("fix these?")
+    let fix = inquire::Confirm::new(&i18n::t("fix-confirm"))
         .with_default(true)
         .prompt()
         .map_err(ask_failed)?;
     if !fix {
         say(
             cli,
-            &format!(
-                "Ok i am not doing those, but the {} version conflicts, {} conflicts, {} soft conflicts and {} bad hashes will be as it is",
-                version_conflicts.len(),
-                errors.len(),
-                warnings.len(),
-                bad.len(),
+            &i18n::t_args(
+                "verify-skip-conflicts",
+                &[
+                    ("version", &version_conflicts.len().to_string()),
+                    ("real", &errors.len().to_string()),
+                    ("soft", &warnings.len().to_string()),
+                    ("bad", &bad.len().to_string()),
+                ],
             ),
         );
         let hard = bad.len() + errors.len() + version_conflicts.len();
         if hard > 0 {
-            bail!("{hard} problem(s) are still there, so this run fails");
+            bail!(
+                "{}",
+                i18n::t_args("verify-hard-fail", &[("count", &hard.to_string())])
+            );
         }
         return Ok(());
     }
 
     let label = targets.first().map(|t| t.label()).unwrap_or_default();
-    let fix_target = targets.first().map(|t| (t.minecraft.clone(), t.loader.kind.clone()));
+    let fix_target = targets
+        .first()
+        .map(|t| (t.minecraft.clone(), t.loader.kind.clone()));
     let mut fixes: Vec<String> = Vec::new();
     for (err_label, c) in &errors {
         if c.kind != "needs" || modmeta::is_platform(&c.other) {
@@ -4596,18 +5385,34 @@ async fn verify_cmd(
         {
             Ok((slug, version)) => {
                 if pkg_is_locked(&p.manifest, &slug) {
-                    warn(cli, &format!("{slug} is locked, if you meant to update {slug} edit slug to false or delete the slug line"));
+                    warn(
+                        cli,
+                        &i18n::t_args("verify-locked-slug", &[("slug", slug.as_str())]),
+                    );
                 } else {
                     set_pin(&mut p.manifest, &slug, &key, &version, targets.len() == 1);
-                    fixes.push(format!(
-                        "{err_label}: {} -> {version} for {key} (wanted {range})",
-                        c.other
+                    fixes.push(i18n::t_args(
+                        "verify-fix-row",
+                        &[
+                            ("label", err_label.as_str()),
+                            ("other", c.other.as_str()),
+                            ("version", version.as_str()),
+                            ("key", key.as_str()),
+                            ("range", range),
+                        ],
                     ));
                 }
             }
             Err(e) => warn(
                 cli,
-                &format!("could not satisfy {} {}: {e:#}", c.other, c.wanted),
+                &i18n::t_args(
+                    "verify-could-not-satisfy",
+                    &[
+                        ("other", c.other.as_str()),
+                        ("wanted", c.wanted.as_str()),
+                        ("error", &format!("{e:#}")),
+                    ],
+                ),
             ),
         }
     }
@@ -4641,18 +5446,35 @@ async fn verify_cmd(
         {
             Ok((slug, version)) => {
                 if pkg_is_locked(&p.manifest, &slug) {
-                    warn(cli, &format!("{slug} is locked, if you meant to update {slug} edit slug to false or delete the slug line"));
+                    warn(
+                        cli,
+                        &i18n::t_args("verify-locked-slug", &[("slug", slug.as_str())]),
+                    );
                 } else {
                     set_pin(&mut p.manifest, &slug, &key, &version, targets.len() == 1);
-                    warn_fixes.push(format!(
-                        "{warn_label}: {slug} -> {version} for {key} (was {} inside {})",
-                        c.found, c.wanted
+                    warn_fixes.push(i18n::t_args(
+                        "verify-warn-fix-row",
+                        &[
+                            ("label", warn_label.as_str()),
+                            ("slug", slug.as_str()),
+                            ("version", version.as_str()),
+                            ("key", key.as_str()),
+                            ("found", c.found.as_str()),
+                            ("wanted", c.wanted.as_str()),
+                        ],
                     ));
                 }
             }
             Err(e) => warn(
                 cli,
-                &format!("could not step {} out of {}: {e:#}", c.other, c.wanted),
+                &i18n::t_args(
+                    "verify-could-not-step",
+                    &[
+                        ("other", c.other.as_str()),
+                        ("wanted", c.wanted.as_str()),
+                        ("error", &format!("{e:#}")),
+                    ],
+                ),
             ),
         }
     }
@@ -4666,14 +5488,26 @@ async fn verify_cmd(
         };
         let loaders = vec![t.loader.kind.clone()];
         let Ok(project) = client.project(&v.project).await else {
-            warn(cli, &format!("could not fix {}: not on modrinth", v.project));
+            warn(
+                cli,
+                &i18n::t_args(
+                    "verify-fix-not-modrinth",
+                    &[("project", v.project.as_str())],
+                ),
+            );
             continue;
         };
         let Ok(list) = client
             .versions(&project, Some(&t.minecraft), &loaders)
             .await
         else {
-            warn(cli, &format!("could not fix {}: version list failed", v.project));
+            warn(
+                cli,
+                &i18n::t_args(
+                    "verify-fix-version-list-failed",
+                    &[("project", v.project.as_str())],
+                ),
+            );
             continue;
         };
         let key = format!("{}+{}", t.minecraft, t.loader.kind);
@@ -4695,10 +5529,7 @@ async fn verify_cmd(
         if pkg_is_locked(&p.manifest, &v.project) {
             warn(
                 cli,
-                &format!(
-                    "{} is locked, meaning the updates are disabled for {}",
-                    v.project, v.project
-                ),
+                &i18n::t_args("verify-locked-disabled", &[("project", v.project.as_str())]),
             );
             continue;
         }
@@ -4710,14 +5541,22 @@ async fn verify_cmd(
             targets.len() == 1,
         );
         if chosen.version_number == v.version_number {
-            vc_fixes.push(format!(
-                "{}: the version of {} can be replaced safely with the same version for {}",
-                v.label, v.project, v.loader
+            vc_fixes.push(i18n::t_args(
+                "verify-vc-same",
+                &[
+                    ("label", v.label.as_str()),
+                    ("project", v.project.as_str()),
+                    ("loader", v.loader.as_str()),
+                ],
             ));
         } else {
-            vc_fixes.push(format!(
-                "{}: a correct version will be downloaded for the right loader because there wasn't a similar one for {} ({})",
-                v.label, v.loader, chosen.version_number
+            vc_fixes.push(i18n::t_args(
+                "verify-vc-different",
+                &[
+                    ("label", v.label.as_str()),
+                    ("loader", v.loader.as_str()),
+                    ("version", chosen.version_number.as_str()),
+                ],
             ));
         }
     }
@@ -4725,36 +5564,41 @@ async fn verify_cmd(
         p.manifest.write(&p.dir)?;
         if !fixes.is_empty() {
             let count = fixes.len();
-            say(cli, &format!("{count} package(s) adjusted so the mods fit"));
+            say(
+                cli,
+                &i18n::t_args("verify-packages-adjusted", &[("count", &count.to_string())]),
+            );
             for line in &fixes {
                 println!("  {line}");
             }
         }
         if !warn_fixes.is_empty() {
             let count = warn_fixes.len();
-            say(cli, &format!("{count} soft conflict(s) fixed"));
+            say(
+                cli,
+                &i18n::t_args("verify-soft-fixed", &[("count", &count.to_string())]),
+            );
             for line in &warn_fixes {
                 println!("  {line}");
             }
         }
         if !vc_fixes.is_empty() {
             let count = vc_fixes.len();
-            say(cli, &format!("{count} version conflict(s) fixed"));
+            say(
+                cli,
+                &i18n::t_args("verify-version-fixed", &[("count", &count.to_string())]),
+            );
             for line in &vc_fixes {
                 println!("  {line}");
             }
         }
     }
-    say(cli, &format!("locking {label} again"));
+    say(
+        cli,
+        &i18n::t_args("verify-locking-again", &[("label", label.as_str())]),
+    );
     match &fix_target {
-        Some((mc, kind)) => lock_cmd(
-            cli,
-            api,
-            Some(mc),
-            LoaderKind::parse(kind),
-            false,
-        )
-        .await,
+        Some((mc, kind)) => lock_cmd(cli, api, Some(mc), LoaderKind::parse(kind), false).await,
         None => Ok(()),
     }
 }
@@ -4831,18 +5675,29 @@ async fn fix_missing(
         }
         detail(
             cli,
-            &format!("{slug} is not {mod_id} when cracked open, skipping it"),
+            &i18n::t_args(
+                "candidate-wrong-id",
+                &[("slug", slug.as_str()), ("mod_id", mod_id)],
+            ),
         );
     }
+    let any_mc = i18n::t("candidate-any-mc");
+    let mc_label = mc.unwrap_or(&any_mc);
     if seen_candidate {
         bail!(
-            "no modrinth build of {mod_id} can be confirmed for {} (the candidates were not that mod)",
-            mc.unwrap_or("any minecraft version")
+            "{}",
+            i18n::t_args(
+                "candidate-no-build",
+                &[("mod_id", mod_id), ("mc", mc_label)]
+            )
         );
     }
     bail!(
-        "no modrinth project provides {mod_id} in {range} for {}",
-        mc.unwrap_or("any minecraft version")
+        "{}",
+        i18n::t_args(
+            "candidate-no-project",
+            &[("mod_id", mod_id), ("range", range), ("mc", mc_label),]
+        )
     );
 }
 
@@ -4877,17 +5732,29 @@ async fn fix_breaks(
         }
         detail(
             cli,
-            &format!("{slug} is not {mod_id} when cracked open, skipping it"),
+            &i18n::t_args(
+                "candidate-wrong-id",
+                &[("slug", slug.as_str()), ("mod_id", mod_id)],
+            ),
         );
     }
     if seen_candidate {
         bail!(
-            "no modrinth build of {mod_id} can be confirmed out of {range} (the candidates were not that mod)"
+            "{}",
+            i18n::t_args(
+                "candidate-no-build-outside",
+                &[("mod_id", mod_id), ("range", range)]
+            )
         );
     }
+    let any_mc = i18n::t("candidate-any-mc");
+    let mc_label = mc.unwrap_or(&any_mc);
     bail!(
-        "no modrinth version of {mod_id} stays out of {range} for {}",
-        mc.unwrap_or("any minecraft version")
+        "{}",
+        i18n::t_args(
+            "candidate-no-version-outside",
+            &[("mod_id", mod_id), ("range", range), ("mc", mc_label),]
+        )
     );
 }
 
@@ -4914,7 +5781,11 @@ fn set_pin(manifest: &mut Manifest, slug: &str, key: &str, version: &str, single
         kind: PkgType::Mod,
         project: Some(slug.to_string()),
         id: None,
-        version: if single { Some(version.to_string()) } else { None },
+        version: if single {
+            Some(version.to_string())
+        } else {
+            None
+        },
         versions: if single { BTreeMap::new() } else { versions },
         skip: Vec::new(),
         env: None,
@@ -4945,29 +5816,31 @@ fn print_report(cli: &Cli, report: &validate::Report) -> Result<()> {
     if report.ok() {
         say(
             cli,
-            &format!(
-                "everything checks out, {} warning{}",
-                report.warnings.len(),
-                if report.warnings.len() == 1 { "" } else { "s" }
+            &i18n::t_args(
+                "report-ok",
+                &[
+                    ("count", &report.warnings.len().to_string()),
+                    ("suffix", if report.warnings.len() == 1 { "" } else { "s" }),
+                ],
             ),
         );
         return Ok(());
     }
     bail!(
-        "{} thing{} wrong, not building",
-        report.errors.len(),
-        if report.errors.len() == 1 { "" } else { "s" }
+        "{}",
+        i18n::t_args(
+            "report-failed",
+            &[
+                ("count", &report.errors.len().to_string()),
+                ("suffix", if report.errors.len() == 1 { "" } else { "s" }),
+            ]
+        )
     )
 }
 
-const SCOPES_NEEDED: &str = "Read Projects, Create Versions and Write Versions";
-const BAD_SCOPES: &str = "Sorry, you did not select Read Projects, Create Versions and Write Versions when generating the token, edit it to have it!";
-const BAD_TOKEN: &str = "That token was not accepted by modrinth, check you copied the whole thing, the token is shown only once when you make it";
-const EXPIRED: &str = "Sorry, your token has expired, please regenerate your token from the settings";
-
 fn modrinth_gave_up(why: &str) -> anyhow::Error {
     anyhow::anyhow!(crate::modrinth::with_details(
-        "We couldn't connect to modrinth sorry!",
+        &i18n::t("modrinth-gave-up"),
         why
     ))
 }
@@ -4975,11 +5848,17 @@ fn modrinth_gave_up(why: &str) -> anyhow::Error {
 const PAT_PAGE: &str = "https://modrinth.com/settings/pats";
 
 fn explain_pat() {
-    println!("If this is usually your first time publishing congrats, but also, for explainers:");
+    println!("{}", i18n::t("explain-pat-intro"));
     println!();
-    println!("The Modrinth Token is required for when doing publishing to your modpack, if you");
-    println!("don't you simply click on \"No i don't\" which usually opens the page to configure");
-    println!("one, when you do make sure you select {SCOPES_NEEDED}");
+    println!("{}", i18n::t("explain-pat-required"));
+    println!("{}", i18n::t("explain-pat-no-token"));
+    println!(
+        "{}",
+        i18n::t_args(
+            "explain-pat-scopes",
+            &[("scopes", &i18n::t("token-scopes-needed"))]
+        )
+    );
     println!();
 }
 
@@ -4992,12 +5871,15 @@ fn open_browser(url: &str) -> Result<()> {
     } else if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).spawn().is_ok()
     } else {
-        std::process::Command::new("xdg-open").arg(url).spawn().is_ok()
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .is_ok()
     };
     if spawned {
         Ok(())
     } else {
-        bail!("could not open a browser, go to {url} yourself")
+        bail!("{}", i18n::t_args("open-browser-failed", &[("url", url)]))
     }
 }
 
@@ -5007,28 +5889,33 @@ fn ask_token_first_time(explained: &mut bool) -> Result<String> {
         *explained = true;
     }
     loop {
-        let menu = vec!["I have one".to_string(), "No i don't".to_string()];
-        let picked = inquire::Select::new("Do you have a Modrinth Token?", menu.clone())
+        let menu = vec![i18n::t("token-menu-have"), i18n::t("token-menu-no")];
+        let picked = inquire::Select::new(&i18n::t("token-have-prompt"), menu.clone())
             .with_starting_cursor(0)
             .prompt()
             .map_err(ask_failed)?;
         if picked == menu[1] {
             println!();
             println!(
-                "Go make a token at {PAT_PAGE}, select {SCOPES_NEEDED} and then select \"I have one\" when you are done"
+                "{}",
+                i18n::t_args(
+                    "token-make",
+                    &[
+                        ("url", PAT_PAGE),
+                        ("scopes", &i18n::t("token-scopes-needed"))
+                    ]
+                )
             );
             println!();
-            ask("press enter to open")?;
+            ask(&i18n::t("token-press-enter"))?;
             let _ = open_browser(PAT_PAGE);
-            println!("opened {PAT_PAGE}");
+            println!("{}", i18n::t_args("token-opened", &[("url", PAT_PAGE)]));
             println!();
             continue;
         }
-        return inquire::Password::new(
-            "Type your Modrinth token here (usually after you generated the token below your name): ",
-        )
-        .prompt()
-        .map_err(ask_failed);
+        return inquire::Password::new(&format!("{} ", i18n::t("token-password-prompt")))
+            .prompt()
+            .map_err(ask_failed);
     }
 }
 
@@ -5040,22 +5927,16 @@ fn resolve_token(cli: &Cli, given: Option<&str>, explained: &mut bool) -> Result
         match secret::load() {
             Ok(Some(t)) => {
                 if !crate::modrinth::token_looks_wrong(&t) {
-                    detail(cli, "logging in to your account");
+                    detail(cli, &i18n::t("token-logging-in"));
                     return Ok(t);
                 }
-                detail(
-                    cli,
-                    "the saved token is not a modrinth token, throwing it away",
-                );
+                detail(cli, &i18n::t("token-saved-invalid"));
                 forget_secret(cli);
             }
             Ok(None) => {}
             Err(e) => {
                 detail(cli, &e.to_string());
-                detail(
-                    cli,
-                    "that saved token CAN NOT be recovered, deleting...",
-                );
+                detail(cli, &i18n::t("token-unrecoverable"));
                 forget_secret(cli);
             }
         }
@@ -5063,16 +5944,13 @@ fn resolve_token(cli: &Cli, given: Option<&str>, explained: &mut bool) -> Result
     loop {
         let token = ask_token_first_time(explained)?.trim().to_string();
         if token.is_empty() {
-            bail!("this is not a token");
+            bail!("{}", i18n::t("token-not-a-token"));
         }
         if crate::modrinth::token_looks_wrong(&token) {
-            detail(
-                cli,
-                "That isn't the right token, modrinth only accepts: mrp_, mra_ or mro_!",
-            );
+            detail(cli, &i18n::t("token-wrong-prefix"));
             continue;
         }
-        detail(cli, "saving your token");
+        detail(cli, &i18n::t("token-saving"));
         secret::save(&token)?;
         return Ok(token);
     }
@@ -5080,7 +5958,10 @@ fn resolve_token(cli: &Cli, given: Option<&str>, explained: &mut bool) -> Result
 
 fn forget_secret(cli: &Cli) {
     if let Err(e) = secret::clear() {
-        detail(cli, &format!("could not throw the old token away: {e}"));
+        detail(
+            cli,
+            &i18n::t_args("token-clear-failed", &[("error", &e.to_string())]),
+        );
     }
 }
 
@@ -5094,19 +5975,29 @@ fn resolve_project_id(cli: &Cli, given: Option<&str>, p: &Project) -> Result<Str
         .clone()
         .filter(|s| !s.trim().is_empty())
     {
-        detail(cli, &format!("using modrinthProjectId {id} from {MANIFEST_FILE}"));
+        detail(
+            cli,
+            &i18n::t_args(
+                "project-id-using",
+                &[("id", id.as_str()), ("file", MANIFEST_FILE)],
+            ),
+        );
         return Ok(id);
     }
-    let id = ask("what is the modrinth project id? (in your project click the 3 dots and click \"Copy ID\")")?
-        .trim()
-        .to_string();
+    let id = ask(&i18n::t("project-id-prompt"))?.trim().to_string();
     if id.is_empty() {
-        bail!("no project id, nothing was published");
+        bail!("{}", i18n::t("project-id-empty"));
     }
     let mut pack = p.manifest.clone();
     pack.modrinth_project_id = Some(id.clone());
     pack.write(&p.dir)?;
-    detail(cli, &format!("saved modrinthProjectId {id} to {MANIFEST_FILE}"));
+    detail(
+        cli,
+        &i18n::t_args(
+            "project-id-saved",
+            &[("id", id.as_str()), ("file", MANIFEST_FILE)],
+        ),
+    );
     Ok(id)
 }
 
@@ -5148,7 +6039,10 @@ async fn publish(
     let p = load_project(cli)?;
     let version = p.manifest.version.trim().to_string();
     if version.is_empty() {
-        bail!("no version to publish, set \"version\" in {MANIFEST_FILE}");
+        bail!(
+            "{}",
+            i18n::t_args("publish-no-version", &[("file", MANIFEST_FILE)])
+        );
     }
     let top = p
         .manifest
@@ -5158,35 +6052,36 @@ async fn publish(
         .trim()
         .to_string();
 
-    step(cli, 1, 5, "locking every mod to a version");
+    step(cli, 1, 5, &i18n::t("publish-step-lock"));
     if !Lock::exists(&p.dir) {
         lock_cmd(cli, api, None, None, false).await?;
     }
     let mut lock = Lock::load(&p.dir)?;
     if lock.manifest_hash != p.manifest.fingerprint() {
-        detail(cli, &format!("{MANIFEST_FILE} changed, locking again"));
+        detail(
+            cli,
+            &i18n::t_args("publish-manifest-changed", &[("file", MANIFEST_FILE)]),
+        );
         lock_cmd(cli, api, None, None, false).await?;
         lock = Lock::load(&p.dir)?;
     }
     if let Some(want) = mc {
         let only = manifest::pick(&p.softwares.targets, Some(want), loader)?;
-        lock.targets.retain(|t| t.minecraft == only.minecraft && t.loader.kind == only.loader.kind);
+        lock.targets
+            .retain(|t| t.minecraft == only.minecraft && t.loader.kind == only.loader.kind);
     } else if let Some(l) = loader {
         lock.targets.retain(|t| t.loader.kind == l.as_str());
     }
     if lock.targets.is_empty() {
-        bail!("no target left to publish");
+        bail!("{}", i18n::t("publish-no-targets"));
     }
 
-    step(cli, 2, 5, "building the mrpacks");
+    step(cli, 2, 5, &i18n::t("publish-step-build"));
     let sources = override_sources(&p);
     let reused = build::stamp_fresh(out, &lock, &sources);
     let mut built_paths: Vec<PathBuf> = Vec::new();
     if reused {
-        detail(
-            cli,
-            "this lock and these sources are already built, reusing the output files",
-        );
+        detail(cli, &i18n::t("publish-reuse"));
     }
     let groups = group_by_mc(&lock.targets);
     let mut releases: Vec<Release> = Vec::new();
@@ -5197,7 +6092,13 @@ async fn publish(
             } else {
                 detail(
                     cli,
-                    &format!("building for {}, {}", t.minecraft, t.loader.kind),
+                    &i18n::t_args(
+                        "publish-building-for",
+                        &[
+                            ("mc", t.minecraft.as_str()),
+                            ("loader", t.loader.kind.as_str()),
+                        ],
+                    ),
                 );
                 let path = build::build(&lock, t, out, &sources)?;
                 built_paths.push(path.clone());
@@ -5208,7 +6109,16 @@ async fn publish(
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| format!("{}.mrpack", p.manifest.name));
             let size = std::fs::metadata(&built).map(|m| m.len()).unwrap_or(0);
-            detail(cli, &format!("  {name} ({size} bytes)"));
+            detail(
+                cli,
+                &format!(
+                    "  {}",
+                    i18n::t_args(
+                        "publish-built-file",
+                        &[("name", name.as_str()), ("size", &size.to_string())]
+                    )
+                ),
+            );
             let slot = match releases.iter_mut().find(|r| &r.minecraft == mc_ver) {
                 Some(r) => r,
                 None => {
@@ -5228,32 +6138,41 @@ async fn publish(
     }
     if !reused {
         if let Err(e) = build::write_stamp(out, &lock, &sources, &built_paths) {
-            detail(cli, &format!("could not write the build stamp: {e:#}"));
+            detail(
+                cli,
+                &i18n::t_args("publish-stamp-failed", &[("error", &format!("{e:#}"))]),
+            );
         }
     }
     if releases.is_empty() {
-        bail!("nothing was built");
+        bail!("{}", i18n::t("publish-nothing-built"));
     }
 
-    step(cli, 2, 4, "checking your token");
+    step(cli, 2, 4, &i18n::t("publish-step-token"));
     let client = Modrinth::new(api)?;
     let mut explained = false;
     let mut token = resolve_token(cli, token_arg, &mut explained)?;
     if crate::modrinth::token_looks_wrong(&token) {
-        bail!("That isn't the right token, modrinth only accepts: mrp_, mra_ or mro_!");
+        bail!("{}", i18n::t("token-wrong-prefix"));
     }
     match client.whoami(&token).await {
-        Ok(Ok(u)) => say(cli, &format!("signed in as {u}")),
-        _ => detail(cli, "i couldn't read who you are, is Read User Data allowed?"),
+        Ok(Ok(u)) => say(
+            cli,
+            &i18n::t_args("publish-signed-in", &[("user", u.as_str())]),
+        ),
+        _ => detail(cli, &i18n::t("publish-whoami-failed")),
     }
 
     let project_id = resolve_project_id(cli, project_arg, &p)?;
 
-    step(cli, 3, 4, "checking the project");
+    step(cli, 3, 4, &i18n::t("publish-step-project"));
     if !client.project_exists(&token, &project_id).await? {
-        bail!("Sorry, this project no longer exists, either it was deleted privated or simply gone");
+        bail!("{}", i18n::t("publish-project-gone"));
     }
-    detail(cli, &format!("{project_id} is there"));
+    detail(
+        cli,
+        &i18n::t_args("publish-project-exists", &[("id", project_id.as_str())]),
+    );
 
     let existing = client.project_versions(&token, &project_id).await?;
     let old_featured: Vec<String> = existing
@@ -5265,7 +6184,7 @@ async fn publish(
     let changelog = latest_changelog(&p.dir);
 
     println!();
-    say(cli, "about to publish");
+    say(cli, &i18n::t("publish-about-to"));
     for r in &releases {
         let many = r.loaders.len() > 1;
         let id = if many {
@@ -5277,17 +6196,30 @@ async fn publish(
         } else {
             format!("v{version}-{}", r.minecraft)
         };
-        let star = if r.minecraft == top { "  (featured)" } else { "" };
+        let star = if r.minecraft == top {
+            format!("  {}", i18n::t("publish-featured-tag"))
+        } else {
+            String::new()
+        };
         println!("  {}  {}{star}", id, r.loaders.join(", "));
         for (_, n) in &r.files {
             println!("      {n}");
         }
     }
     if !changelog.is_empty() {
-        println!("  changelog     {} lines", changelog.lines().count());
+        println!(
+            "  {}",
+            i18n::t_args(
+                "publish-changelog-lines",
+                &[("count", &changelog.lines().count().to_string())]
+            )
+        );
     }
     for v in &old_featured {
-        println!("  unfeaturing   {v}");
+        println!(
+            "  {}",
+            i18n::t_args("publish-unfeaturing", &[("id", v.as_str())])
+        );
     }
     println!();
 
@@ -5297,14 +6229,14 @@ async fn publish(
         }
         warn(
             cli,
-            &format!(
-                "Otherwise this is a resource pack for the modpack, {} will most likely will be withheld in Modrinth's side!",
-                pack.name
+            &i18n::t_args(
+                "publish-pack-withheld-warning",
+                &[("name", pack.name.as_str())],
             ),
         );
     }
 
-    step(cli, 4, 5, "uploading to modrinth");
+    step(cli, 4, 5, &i18n::t("publish-step-upload"));
     let mut made: Vec<(String, String, bool)> = Vec::new();
     let mut created_ids: Vec<String> = Vec::new();
     let mut made_featured = false;
@@ -5335,7 +6267,14 @@ async fn publish(
         };
         detail(
             cli,
-            &format!("[{}/{}] uploading {}", i + 1, total, version_number),
+            &i18n::t_args(
+                "publish-upload-progress",
+                &[
+                    ("current", &(i + 1).to_string()),
+                    ("total", &total.to_string()),
+                    ("version", version_number.as_str()),
+                ],
+            ),
         );
         for (_, n) in &r.files {
             detail(cli, &format!("        {n}"));
@@ -5343,24 +6282,29 @@ async fn publish(
         let created = loop {
             match client.create_version(&token, &body, &r.files).await? {
                 Ok(v) => break v,
-                Err(AuthFailure::BadScopes) => bail!("{BAD_SCOPES}"),
+                Err(AuthFailure::BadScopes) => bail!("{}", i18n::t("publish-bad-scopes")),
                 Err(AuthFailure::Invalid(why)) => {
-                    warn(cli, &crate::modrinth::with_details(BAD_TOKEN, &why));
+                    warn(
+                        cli,
+                        &crate::modrinth::with_details(&i18n::t("publish-bad-token"), &why),
+                    );
                     if token_arg.is_some() {
-                        bail!("the token you passed is not working, so nothing was done");
+                        bail!("{}", i18n::t("publish-token-failed"));
                     }
                 }
                 Err(AuthFailure::Expired(why)) => {
-                    warn(cli, &crate::modrinth::with_details(EXPIRED, &why));
+                    warn(
+                        cli,
+                        &crate::modrinth::with_details(&i18n::t("publish-expired-token"), &why),
+                    );
                     if token_arg.is_some() {
-                        bail!("the token you passed is not working, so nothing was done");
+                        bail!("{}", i18n::t("publish-token-failed"));
                     }
                 }
-                Err(AuthFailure::Other(e))
-                    if e.contains("not found") || e.contains("404") =>
-                {
+                Err(AuthFailure::Other(e)) if e.contains("not found") || e.contains("404") => {
                     bail!(
-                        "Sorry, you don't have permissions over {project_id} to publish it, did they gave you the exact permissions?"
+                        "{}",
+                        i18n::t_args("publish-no-permission", &[("id", project_id.as_str())])
                     );
                 }
                 Err(AuthFailure::Other(e)) => bail!("{}", modrinth_gave_up(&e)),
@@ -5368,18 +6312,27 @@ async fn publish(
             let _ = secret::clear();
             token = ask_token_first_time(&mut explained)?.trim().to_string();
             if token.is_empty() {
-                bail!("this is not a token");
+                bail!("{}", i18n::t("token-not-a-token"));
             }
             if crate::modrinth::token_looks_wrong(&token) {
-                bail!("That isn't the right token, modrinth only accepts: mrp_, mra_ or mro_!");
+                bail!("{}", i18n::t("token-wrong-prefix"));
             }
-            detail(cli, "saving your token");
+            detail(cli, &i18n::t("token-saving"));
             secret::save(&token)?;
-            detail(cli, &format!("trying {} again", version_number));
+            detail(
+                cli,
+                &i18n::t_args(
+                    "publish-retry-version",
+                    &[("version", version_number.as_str())],
+                ),
+            );
         };
         detail(
             cli,
-            &format!("        created {}", created.id),
+            &format!(
+                "        {}",
+                i18n::t_args("publish-created", &[("id", created.id.as_str())])
+            ),
         );
         created_ids.push(created.id.clone());
         made.push((
@@ -5392,7 +6345,7 @@ async fn publish(
         ));
     }
 
-    step(cli, 5, 5, "tidying up the featured version");
+    step(cli, 5, 5, &i18n::t("publish-step-featured"));
     let fresh: Vec<String> = existing
         .iter()
         .filter(|v| !created_ids.contains(&v.id))
@@ -5403,27 +6356,48 @@ async fn publish(
     for id in fresh {
         match client.set_featured(&token, &id, false).await? {
             Ok(()) => {
-                detail(cli, "unfeatured an old one");
+                detail(cli, &i18n::t("publish-unfeatured"));
                 unfeatured += 1;
             }
-            Err(AuthFailure::BadScopes) => bail!("{BAD_SCOPES}"),
-            Err(_) => warn(cli, "could not unfeature an old version"),
+            Err(AuthFailure::BadScopes) => bail!("{}", i18n::t("publish-bad-scopes")),
+            Err(_) => warn(cli, &i18n::t("publish-unfeature-failed")),
         }
     }
 
     println!();
-    say(cli, &format!("published {} version(s):", made.len()));
+    say(
+        cli,
+        &i18n::t_args("publish-summary", &[("count", &made.len().to_string())]),
+    );
     println!();
     for (mc_ver, url, feat) in &made {
         if *feat {
-            println!("- {mc_ver}: {url} (Featured)");
+            println!(
+                "{}",
+                i18n::t_args(
+                    "publish-summary-row",
+                    &[("mc", mc_ver.as_str()), ("url", url.as_str())]
+                )
+            );
         } else {
-            println!("- {mc_ver}: {url}");
+            println!(
+                "{}",
+                i18n::t_args(
+                    "publish-summary-row-plain",
+                    &[("mc", mc_ver.as_str()), ("url", url.as_str())]
+                )
+            );
         }
     }
     if unfeatured > 0 {
         println!();
-        detail(cli, &format!("{unfeatured} old version(s) unfeatured"));
+        detail(
+            cli,
+            &i18n::t_args(
+                "publish-unfeatured-count",
+                &[("count", &unfeatured.to_string())],
+            ),
+        );
     }
     if !created_ids.is_empty() {
         println!();
@@ -5436,13 +6410,13 @@ async fn publish(
                 let mut withheld: Vec<String> = Vec::new();
                 for id in &created_ids {
                     match listed.iter().find(|v| &v.id == id) {
-                        Some(v) if !v.files_missing_attribution.is_empty() => withheld.push(
-                            if v.version_number.is_empty() {
+                        Some(v) if !v.files_missing_attribution.is_empty() => {
+                            withheld.push(if v.version_number.is_empty() {
                                 v.id.clone()
                             } else {
                                 v.version_number.clone()
-                            },
-                        ),
+                            })
+                        }
                         None => withheld.push(id.clone()),
                         _ => {}
                     }
@@ -5450,22 +6424,26 @@ async fn publish(
                 if withheld.len() == created_ids.len() {
                     warn(
                         cli,
-                        &format!(
-                            "All of the version(s) published got withheld by modrinth, you might need to resolve it by going over here: {perms_link}"
-                        ),
+                        &i18n::t_args("publish-all-withheld", &[("url", perms_link.as_str())]),
                     );
                 } else if !withheld.is_empty() {
                     warn(
                         cli,
-                        &format!(
-                            "{} was withheld when it was released, you might need to resolve it by going over here: {perms_link}",
-                            withheld.join(", ")
+                        &i18n::t_args(
+                            "publish-some-withheld",
+                            &[("list", &withheld.join(", ")), ("url", perms_link.as_str())],
                         ),
                     );
                 }
             }
             Err(e) => {
-                detail(cli, &format!("could not check whether modrinth withheld anything: {e:#}"));
+                detail(
+                    cli,
+                    &i18n::t_args(
+                        "publish-withheld-check-failed",
+                        &[("error", &format!("{e:#}"))],
+                    ),
+                );
             }
         }
     }
@@ -5505,12 +6483,22 @@ async fn validate_cmd(cli: &Cli) -> Result<()> {
     let lock = if Lock::exists(&p.dir) {
         Lock::load(&p.dir)?
     } else {
-        say(cli, "nothing is locked yet, running `ehmodpack lock` first");
-        lock_cmd(cli, &cli.api.clone().unwrap_or_else(|| DEFAULT_API.to_string()), None, None, false).await?;
+        say(cli, &i18n::t("order-no-lock-first"));
+        lock_cmd(
+            cli,
+            &cli.api.clone().unwrap_or_else(|| DEFAULT_API.to_string()),
+            None,
+            None,
+            false,
+        )
+        .await?;
         Lock::load(&p.dir)?
     };
     println!();
-    print_report(cli, &validate::check(&lock, &p.manifest, &override_sources(&p)))?;
+    print_report(
+        cli,
+        &validate::check(&lock, &p.manifest, &override_sources(&p)),
+    )?;
     check_schema(cli, &p);
     Ok(())
 }
@@ -5519,16 +6507,18 @@ fn java_cmd(cli: &Cli) -> Result<()> {
     println!();
     let javas = crate::minecraft::all_javas();
     if javas.is_empty() {
-        say(cli, "no java was found anywhere");
-        detail(cli, "ehmodpack looked at JAVA_HOME, PATH and the usual install folders");
+        say(cli, &i18n::t("java-none-anywhere"));
+        detail(cli, &i18n::t("java-looked-at"));
         return Ok(());
     }
     say(
         cli,
-        &format!(
-            "found {} java install{}",
-            javas.len(),
-            if javas.len() == 1 { "" } else { "s" }
+        &i18n::t_args(
+            "java-found-count",
+            &[
+                ("count", &javas.len().to_string()),
+                ("suffix", if javas.len() == 1 { "" } else { "s" }),
+            ],
         ),
     );
     println!();
@@ -5545,28 +6535,43 @@ fn java_cmd(cli: &Cli) -> Result<()> {
     let dimmed = vec![false; rows.len()];
     println!(
         "{}",
-        table(cli, &["version", "vendor", "path"], &rows, &dimmed)
+        table(
+            cli,
+            &[
+                i18n::t("header-version"),
+                i18n::t("header-vendor"),
+                i18n::t("header-path"),
+            ],
+            &rows,
+            &dimmed,
+        )
     );
     if let Ok(p) = load_project(cli) {
         println!();
-        say(cli, "what your targets ask for");
+        say(cli, &i18n::t("java-target-wants"));
         for target in &p.softwares.targets {
             let want = crate::minecraft::required_java(&target.minecraft, target.java.as_deref());
             match javas.iter().find(|j| j.major >= want) {
                 Some(j) => detail(
                     cli,
-                    &format!(
-                        "{} needs java {want}, ok with java {} at {}",
-                        target.label(),
-                        j.version,
-                        j.exe.display()
+                    &i18n::t_args(
+                        "java-target-ok",
+                        &[
+                            ("target", target.label().as_str()),
+                            ("want", &want.to_string()),
+                            ("version", j.version.as_str()),
+                            ("path", &j.exe.display().to_string()),
+                        ],
                     ),
                 ),
                 None => warn(
                     cli,
-                    &format!(
-                        "{} needs java {want}, nothing found that new",
-                        target.label()
+                    &i18n::t_args(
+                        "java-target-none",
+                        &[
+                            ("target", target.label().as_str()),
+                            ("want", &want.to_string()),
+                        ],
                     ),
                 ),
             }
@@ -5590,7 +6595,7 @@ fn parse_position(raw: &str) -> Result<Option<RpPosition>> {
     }
     if let Ok(n) = want.parse::<u32>() {
         if n == 0 {
-            bail!("a position of 0 is not a thing, 1 is the top of the stack");
+            bail!("{}", i18n::t("order-zero-invalid"));
         }
         return Ok(Some(RpPosition::At(n)));
     }
@@ -5598,7 +6603,13 @@ fn parse_position(raw: &str) -> Result<Option<RpPosition>> {
         "top" => Ok(Some(RpPosition::Named(manifest::RpNamed::Top))),
         "bottom" => Ok(Some(RpPosition::Named(manifest::RpNamed::Bottom))),
         "off" | "none" => Ok(None),
-        other => bail!("{other:?} is not a position, use a number like 1, or top or bottom"),
+        other => bail!(
+            "{}",
+            i18n::t_args(
+                "order-position-invalid",
+                &[("other", &format!("{other:?}"))]
+            )
+        ),
     }
 }
 
@@ -5627,9 +6638,7 @@ fn order_entries(
                         t.packages
                             .iter()
                             .find(|lp| lp.project.eq_ignore_ascii_case(&pkg.key()))
-                            .map(|lp| {
-                                lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string()
-                            })
+                            .map(|lp| lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string())
                     })
             })
             .unwrap_or_else(|| pkg.key());
@@ -5643,8 +6652,7 @@ fn order_entries(
         out.push((pack.entry(), position));
     }
     for (id, _) in manifest::builtin_packs_for(&target.loader.kind) {
-        if p
-            .manifest
+        if p.manifest
             .external_packs
             .iter()
             .any(|e| e.name.eq_ignore_ascii_case(id))
@@ -5668,11 +6676,14 @@ fn print_order(cli: &Cli, p: &Project, lock: Option<&Lock>, targets: &[Target]) 
     for target in targets {
         say(
             cli,
-            &format!("resource pack order for {}", Targetish::label(target)),
+            &i18n::t_args(
+                "order-resource-pack-order",
+                &[("label", Targetish::label(target).as_str())],
+            ),
         );
         let entries = order_entries(p, target, lock);
         if entries.is_empty() {
-            detail(cli, "nothing is active here");
+            detail(cli, &i18n::t("order-nothing-active"));
             continue;
         }
         let rows: Vec<Vec<String>> = entries
@@ -5681,7 +6692,12 @@ fn print_order(cli: &Cli, p: &Project, lock: Option<&Lock>, targets: &[Target]) 
             .collect();
         println!(
             "{}",
-            table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+            table(
+                cli,
+                &[i18n::t("header-top"), i18n::t("header-pack")],
+                &rows,
+                &vec![false; rows.len()],
+            )
         );
     }
 }
@@ -5710,14 +6726,25 @@ fn order_specs(packs: &[String], off: bool) -> Result<Vec<(String, String)>> {
             out.push((token.trim().to_string(), packs[i + 1].clone()));
             i += 2;
         } else {
-            bail!("{token:?} needs a position, like {token}=1 or {token} 1");
+            bail!(
+                "{}",
+                i18n::t_args(
+                    "order-pos-needed-token",
+                    &[("token", &format!("{token:?}"))]
+                )
+            );
         }
     }
     Ok(out)
 }
 
-const ORDER_SAVE: &str = "save and exit";
-const ORDER_CLEAR: &str = "clear every position on these targets";
+fn order_save() -> String {
+    i18n::t("order-save")
+}
+
+fn order_clear() -> String {
+    i18n::t("order-clear-menu")
+}
 
 fn order_pos_label(position: Option<RpPosition>) -> String {
     match position {
@@ -5799,10 +6826,10 @@ fn order_choices(
                 order_pos_label(resolved),
                 shown,
                 match (pack.is_builtin(), pack.is_active()) {
-                    (true, true) => "   (built-in pack)",
-                    (true, false) => "   (built-in pack, off)",
-                    (false, true) => "",
-                    (false, false) => "   (off)",
+                    (true, true) => format!("   {}", i18n::t("order-builtin")),
+                    (true, false) => format!("   {}", i18n::t("order-builtin-off")),
+                    (false, true) => String::new(),
+                    (false, false) => format!("   {}", i18n::t("order-off")),
                 }
             ),
             OrderEntry {
@@ -5812,8 +6839,7 @@ fn order_choices(
         ));
     }
     for (id, label) in &builtins {
-        if p
-            .manifest
+        if p.manifest
             .external_packs
             .iter()
             .any(|e| e.name.eq_ignore_ascii_case(id))
@@ -5821,7 +6847,11 @@ fn order_choices(
             continue;
         }
         out.push((
-            format!("{:<5} {label}   (built-in pack)", order_pos_label(None)),
+            format!(
+                "{:<5} {label}   {}",
+                order_pos_label(None),
+                i18n::t("order-builtin")
+            ),
             OrderEntry {
                 name: id.to_string(),
                 external: true,
@@ -5829,8 +6859,7 @@ fn order_choices(
         ));
     }
     for file in on_disk {
-        if p
-            .manifest
+        if p.manifest
             .external_packs
             .iter()
             .any(|e| e.name.eq_ignore_ascii_case(file))
@@ -5838,7 +6867,11 @@ fn order_choices(
             continue;
         }
         out.push((
-            format!("{:<5} {file}   (in the folder, not in the manifest)", order_pos_label(None)),
+            format!(
+                "{:<5} {file}   {}",
+                order_pos_label(None),
+                i18n::t("order-in-folder")
+            ),
             OrderEntry {
                 name: file.clone(),
                 external: true,
@@ -5911,7 +6944,7 @@ fn set_order_on(
         }
     }
     let where_ = if scope.iter().any(|k| k.is_none()) {
-        "every target".to_string()
+        i18n::t("order-every-target")
     } else {
         targets
             .iter()
@@ -5921,7 +6954,12 @@ fn set_order_on(
     };
     say(
         cli,
-        &format!("{} is {} on {}", entry.name, order_pos_label(position), where_),
+        &format!(
+            "{} is {} on {}",
+            entry.name,
+            order_pos_label(position),
+            where_
+        ),
     );
 }
 
@@ -5936,7 +6974,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
     let pack_shas = record_pack_shas(&p);
 
     if !std::io::stdin().is_terminal() {
-        say(cli, "no terminal, so here is the order as it stands");
+        say(cli, &i18n::t("order-no-terminal"));
         let targets: Vec<Target> = match (mc, loader) {
             (None, None) => p.softwares.targets.clone(),
             _ => vec![manifest::pick(&p.softwares.targets, mc, loader)?.clone()],
@@ -5954,17 +6992,23 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
         let options: Vec<String> = labels
             .iter()
             .cloned()
-            .chain(std::iter::once("all of them".to_string()))
+            .chain(std::iter::once(i18n::t("option-all-of-them")))
             .collect();
         let chosen: Vec<Target> = loop {
             let picked = inquire::MultiSelect::new(
-                &format!("{} has {} targets, which ones?", MANIFEST_FILE, labels.len()),
+                &i18n::t_args(
+                    "order-targets-prompt",
+                    &[
+                        ("file", MANIFEST_FILE),
+                        ("count", &labels.len().to_string()),
+                    ],
+                ),
                 options.clone(),
             )
-            .with_help_message("space ticks a target, enter confirms, right arrow picks everything")
+            .with_help_message(&i18n::t("order-targets-hint"))
             .prompt()
             .map_err(ask_failed)?;
-            if picked.iter().any(|o| o == "all of them") {
+            if picked.iter().any(|o| o == &i18n::t("option-all-of-them")) {
                 break p.softwares.targets.clone();
             }
             let chosen: Vec<Target> = labels
@@ -5976,10 +7020,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
             if !chosen.is_empty() {
                 break chosen;
             }
-            detail(
-                cli,
-                "nothing ticked yet, press space on a target then enter, or tick all of them",
-            );
+            detail(cli, &i18n::t("order-nothing-ticked"));
         };
         let keys: Vec<Option<String>> = if chosen.len() == p.softwares.targets.len() {
             vec![None]
@@ -5993,7 +7034,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
     };
 
     let scope_label = if scope.iter().any(|k| k.is_none()) {
-        "every target".to_string()
+        i18n::t("order-every-target")
     } else {
         targets
             .iter()
@@ -6004,13 +7045,19 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
     println!();
     say(
         cli,
-        &format!("ordering resource packs for {scope_label}, 1 is the top of the stack"),
+        &i18n::t_args("order-header", &[("scope", scope_label.as_str())]),
     );
     for target in &targets {
-        say(cli, &format!("right now, {}", Targetish::label(target)));
+        say(
+            cli,
+            &i18n::t_args(
+                "order-current",
+                &[("value", Targetish::label(target).as_str())],
+            ),
+        );
         let entries = order_entries(&p, target, lock.as_ref());
         if entries.is_empty() {
-            detail(cli, "nothing is active here yet");
+            detail(cli, &i18n::t("order-nothing-active-yet"));
         } else {
             let rows: Vec<Vec<String>> = entries
                 .iter()
@@ -6018,7 +7065,12 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
                 .collect();
             println!(
                 "{}",
-                table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+                table(
+                    cli,
+                    &[i18n::t("header-top"), i18n::t("header-pack")],
+                    &rows,
+                    &vec![false; rows.len()],
+                )
             );
         }
     }
@@ -6032,26 +7084,29 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
     loop {
         let choices = order_choices(&p, &targets, lock.as_ref(), &on_disk);
         let mut menu: Vec<String> = choices.iter().map(|(label, _)| label.clone()).collect();
-        menu.push(ORDER_CLEAR.to_string());
-        menu.push(ORDER_SAVE.to_string());
+        menu.push(order_clear());
+        menu.push(order_save());
 
-        let picked = inquire::Select::new("pick a pack to move", menu.clone())
+        let picked = inquire::Select::new(&i18n::t("order-pick-pack"), menu.clone())
             .with_page_size(16)
-            .with_help_message("enter picks it, the number on the left is where it sits now")
+            .with_help_message(&i18n::t("order-pick-pack-hint"))
             .prompt()
             .map_err(ask_failed)?;
         let Some(i) = menu.iter().position(|o| *o == picked) else {
             continue;
         };
 
-        if picked == ORDER_SAVE {
+        if picked == order_save() {
             break;
         }
-        if picked == ORDER_CLEAR {
-            let yes = inquire::Confirm::new(&format!("clear every position on {scope_label}?"))
-                .with_default(false)
-                .prompt()
-                .map_err(ask_failed)?;
+        if picked == order_clear() {
+            let yes = inquire::Confirm::new(&i18n::t_args(
+                "order-clear-confirm",
+                &[("scope", scope_label.as_str())],
+            ))
+            .with_default(false)
+            .prompt()
+            .map_err(ask_failed)?;
             if yes {
                 let entries: Vec<OrderEntry> = order_choices(&p, &targets, lock.as_ref(), &on_disk)
                     .into_iter()
@@ -6068,7 +7123,7 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
             Some((_, e)) => e.clone(),
             None => continue,
         };
-        let label = format!("where does {} sit", entry.name);
+        let label = i18n::t_args("order-position-prompt", &[("name", entry.name.as_str())]);
         let where_ = inquire::Select::new(&label, positions.clone())
             .prompt()
             .map_err(ask_failed)?;
@@ -6077,14 +7132,17 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
     }
 
     p.manifest.write(&p.dir)?;
-    say(cli, &format!("wrote {MANIFEST_FILE}"));
+    say(cli, &i18n::t_args("wrote-file", &[("file", MANIFEST_FILE)]));
     for target in &targets {
         let label = Targetish::label(target);
         println!();
-        say(cli, &format!("resource pack order for {label}"));
+        say(
+            cli,
+            &i18n::t_args("order-resource-pack-order", &[("label", label.as_str())]),
+        );
         let entries = order_entries(&p, target, lock.as_ref());
         if entries.is_empty() {
-            detail(cli, "nothing is active here");
+            detail(cli, &i18n::t("order-nothing-active"));
             continue;
         }
         let rows: Vec<Vec<String>> = entries
@@ -6093,11 +7151,16 @@ fn order_interactive(cli: &Cli, mc: Option<&str>, loader: Option<LoaderKind>) ->
             .collect();
         println!(
             "{}",
-            table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+            table(
+                cli,
+                &[i18n::t("header-top"), i18n::t("header-pack")],
+                &rows,
+                &vec![false; rows.len()],
+            )
         );
     }
     println!();
-    detail(cli, "run `ehmodpack lock` then `ehmodpack build` to see it in the pack");
+    detail(cli, &i18n::t("order-see-in-pack"));
     Ok(())
 }
 
@@ -6130,10 +7193,13 @@ fn order_cmd(
     for (name, raw) in order_specs(&packs, off)? {
         let position = parse_position(&raw)?;
         if position.is_some() && off {
-            bail!("--off does not take a position, just the pack name");
+            bail!("{}", i18n::t("order-off-no-position"));
         }
         if !off && position.is_none() {
-            bail!("{name:?} needs a position, like {name}=1, or --off to clear it");
+            bail!(
+                "{}",
+                i18n::t_args("order-pos-needed-name", &[("name", &format!("{name:?}"))])
+            );
         }
 
         let mut hit = false;
@@ -6142,37 +7208,49 @@ fn order_cmd(
                 targets.iter().find_map(|t| {
                     l.targets
                         .iter()
-                        .find(|lt| {
-                            lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind
-                        })
+                        .find(|lt| lt.minecraft == t.minecraft && lt.loader.kind == t.loader.kind)
                         .and_then(|lt| {
                             lt.packages
                                 .iter()
                                 .find(|lp| lp.project.eq_ignore_ascii_case(&pkg.key()))
-                                .map(|lp| lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string())
+                                .map(|lp| {
+                                    lp.path.rsplit('/').next().unwrap_or(&lp.path).to_string()
+                                })
                         })
                 })
             });
-            let known = pkg.key().eq_ignore_ascii_case(&name)
-                || file.as_deref() == Some(name.as_str());
+            let known =
+                pkg.key().eq_ignore_ascii_case(&name) || file.as_deref() == Some(name.as_str());
             if !known || !matches!(pkg.kind, PkgType::Resourcepack | PkgType::Shader) {
                 continue;
             }
             if position.is_some() && !pkg.is_active() {
                 pkg.active = Some(true);
-                say(cli, &format!("{} is active now", pkg.key()));
+                say(
+                    cli,
+                    &i18n::t_args("order-active-now", &[("name", pkg.key().as_str())]),
+                );
             }
             set_position(&mut pkg.position, &mut pkg.positions, &key, position);
             say(
                 cli,
-                &format!(
-                    "{} is {}",
-                    pkg.key(),
-                    match &key {
-                        Some(k) => format!("at {} on {k}", show_position(position)),
-                        None => format!("{} everywhere", show_position(position)),
-                    }
-                ),
+                &match &key {
+                    Some(k) => i18n::t_args(
+                        "order-is-at",
+                        &[
+                            ("name", pkg.key().as_str()),
+                            ("position", show_position(position).as_str()),
+                            ("key", k.as_str()),
+                        ],
+                    ),
+                    None => i18n::t_args(
+                        "order-is-everywhere",
+                        &[
+                            ("name", pkg.key().as_str()),
+                            ("position", show_position(position).as_str()),
+                        ],
+                    ),
+                },
             );
             hit = true;
         }
@@ -6186,7 +7264,10 @@ fn order_cmd(
             {
                 if position.is_some() && !pack.is_active() {
                     pack.active = Some(true);
-                    say(cli, &format!("{} is active now", pack.name));
+                    say(
+                        cli,
+                        &i18n::t_args("order-active-now", &[("name", pack.name.as_str())]),
+                    );
                 }
                 if pack.sha1.is_none() && !pack.is_builtin() {
                     if let Some(h) = pack_shas.get(&name) {
@@ -6196,33 +7277,42 @@ fn order_cmd(
                 set_position(&mut pack.position, &mut pack.positions, &key, position);
                 say(
                     cli,
-                    &format!(
-                        "{} is {}",
-                        pack.name,
-                        match &key {
-                            Some(k) => format!("at {} on {k}", show_position(position)),
-                            None => format!("{} everywhere", show_position(position)),
-                        }
-                    ),
+                    &match &key {
+                        Some(k) => i18n::t_args(
+                            "order-is-at",
+                            &[
+                                ("name", pack.name.as_str()),
+                                ("position", show_position(position).as_str()),
+                                ("key", k.as_str()),
+                            ],
+                        ),
+                        None => i18n::t_args(
+                            "order-is-everywhere",
+                            &[
+                                ("name", pack.name.as_str()),
+                                ("position", show_position(position).as_str()),
+                            ],
+                        ),
+                    },
                 );
                 hit = true;
             }
         }
 
         if !hit && !off && on_disk.iter().any(|f| f.eq_ignore_ascii_case(&name)) {
-                let mut pack = manifest::ExternalPack {
-                    name: name.clone(),
-                    active: Some(position.is_some()),
-                    builtin: None,
-                    position: None,
-                    positions: BTreeMap::new(),
-                    sha1: pack_shas.get(&name).cloned(),
-                };
+            let mut pack = manifest::ExternalPack {
+                name: name.clone(),
+                active: Some(position.is_some()),
+                builtin: None,
+                position: None,
+                positions: BTreeMap::new(),
+                sha1: pack_shas.get(&name).cloned(),
+            };
             set_position(&mut pack.position, &mut pack.positions, &key, position);
             p.manifest.external_packs.push(pack);
             say(
                 cli,
-                &format!("added {name} to external_packs, it lives in the overrides folder"),
+                &i18n::t_args("order-added-external", &[("name", name.as_str())]),
             );
             hit = true;
         }
@@ -6239,37 +7329,46 @@ fn order_cmd(
             known.extend(on_disk.iter().cloned());
             let mut seen = BTreeSet::new();
             known.retain(|k| seen.insert(k.to_ascii_lowercase()));
-            bail!("{name:?} is not a resource pack here, try one of: {}", known.join(", "));
+            bail!(
+                "{}",
+                i18n::t_args(
+                    "order-not-a-pack",
+                    &[("name", &format!("{name:?}")), ("list", &known.join(", ")),]
+                )
+            );
         }
     }
 
     p.manifest.write(&p.dir)?;
     if !packs.is_empty() {
-        say(cli, &format!("wrote {MANIFEST_FILE}"));
-    detail(
-        cli,
-        "run ehmodpack lock to refresh the lock and ehmodpack build to apply any changes",
-    );
+        say(cli, &i18n::t_args("wrote-file", &[("file", MANIFEST_FILE)]));
+        detail(cli, &i18n::t("order-lock-build-hint"));
     }
 
     for target in &targets {
         let label = Targetish::label(target);
         println!();
-        say(cli, &format!("resource pack order for {label}"));
+        say(
+            cli,
+            &i18n::t_args("order-resource-pack-order", &[("label", label.as_str())]),
+        );
         let entries = order_entries(&p, target, lock.as_ref());
         if entries.is_empty() {
-            detail(cli, "nothing is active here");
+            detail(cli, &i18n::t("order-nothing-active"));
             continue;
         }
         let rows: Vec<Vec<String>> = entries
             .iter()
-            .map(|(name, position)| {
-                vec![show_position(*position), name.clone()]
-            })
+            .map(|(name, position)| vec![show_position(*position), name.clone()])
             .collect();
         println!(
             "{}",
-            table(cli, &["top", "pack"], &rows, &vec![false; rows.len()])
+            table(
+                cli,
+                &[i18n::t("header-top"), i18n::t("header-pack")],
+                &rows,
+                &vec![false; rows.len()],
+            )
         );
     }
     println!();
@@ -6403,10 +7502,7 @@ fn reconcile_external_packs(
             if new_name != pack.name {
                 detail(
                     cli,
-                    &format!(
-                        "\"{}\" renamed to \"{}\", same pack",
-                        pack.name, new_name
-                    ),
+                    &format!("\"{}\" renamed to \"{}\", same pack", pack.name, new_name),
                 );
                 pack.name = new_name;
                 renamed += 1;
@@ -6435,20 +7531,32 @@ fn check_schema(cli: &Cli, p: &Project) {
 async fn set_release(cli: &Cli, api: &str, version: &str) -> Result<()> {
     let want = version.trim();
     if want.is_empty() {
-        bail!("the version cannot be empty");
+        bail!("{}", i18n::t("setver-empty"));
     }
     let mut p = load_project(cli)?;
     let current = p.manifest.version.trim().to_string();
     if current == want {
-        say(cli, &format!("{MANIFEST_FILE} is already on {want}"));
+        say(
+            cli,
+            &i18n::t_args(
+                "setver-already",
+                &[("file", MANIFEST_FILE), ("version", want)],
+            ),
+        );
         return Ok(());
     }
     p.manifest.version = want.to_string();
     p.manifest.stamp();
     p.manifest.write(&p.dir)?;
-    say(cli, &format!("{MANIFEST_FILE} is now on {want}"));
+    say(
+        cli,
+        &i18n::t_args("setver-now", &[("file", MANIFEST_FILE), ("version", want)]),
+    );
     lock_cmd(cli, api, None, None, false).await?;
-    say(cli, &format!("{LOCK_FILE} refreshed"));
+    say(
+        cli,
+        &i18n::t_args("setver-refreshed", &[("file", LOCK_FILE)]),
+    );
     Ok(())
 }
 
@@ -6463,15 +7571,27 @@ fn update_schema(cli: &Cli) -> Result<()> {
         lock.schema = Some(manifest::lock_schema_url());
         lock.schema_version = manifest::SCHEMA_VERSION;
         lock.write(&p.dir)?;
-        say(cli, &format!("{LOCK_FILE} is on schema v{}", manifest::SCHEMA_VERSION));
+        say(
+            cli,
+            &i18n::t_args(
+                "setver-lock-schema",
+                &[
+                    ("file", LOCK_FILE),
+                    ("version", &manifest::SCHEMA_VERSION.to_string()),
+                ],
+            ),
+        );
     }
     let written = manifest::write_local_schemas(&p.dir)?;
     say(
         cli,
-        &format!(
-            "{} and {SOFTWARES_FILE} are on schema v{}",
-            MANIFEST_FILE,
-            manifest::SCHEMA_VERSION
+        &i18n::t_args(
+            "setver-schemas-schema",
+            &[
+                ("file", MANIFEST_FILE),
+                ("other", SOFTWARES_FILE),
+                ("version", &manifest::SCHEMA_VERSION.to_string()),
+            ],
         ),
     );
     for path in written {
@@ -6517,6 +7637,52 @@ fn notice(cli: &Cli, text: &str) {
     } else {
         println!("{}", text.yellow());
     }
+}
+
+fn device_code_notice(cli: &Cli, text: &str) {
+    if text.starts_with("To sign in, use a web browser") {
+        if color_enabled(cli) {
+            println!("  {}", text.yellow());
+        } else {
+            println!("  {text}");
+        }
+        return;
+    }
+    if text == i18n::t("login-waiting") || text == "Waiting for sign-in..." || text.ends_with("...")
+    {
+        if color_enabled(cli) {
+            println!("  {}", text.cyan());
+        } else {
+            println!("  {text}");
+        }
+        return;
+    }
+    let probe = i18n::t_args("login-go-to", &[("url", "\u{0}"), ("code", "\u{0}")]);
+    let go_to = probe.split_once('\u{0}').and_then(|(prefix, rest)| {
+        rest.split_once('\u{0}')
+            .map(|(mid, suffix)| (prefix, mid, suffix))
+    });
+    if let Some((prefix, mid, suffix)) = go_to
+        && let Some(rest) = text.strip_prefix(prefix)
+        && let Some(without_suffix) = rest.strip_suffix(suffix)
+        && let Some((url, code)) = without_suffix.split_once(mid)
+        && url.contains("://")
+        && !code.is_empty()
+    {
+        if !color_enabled(cli) {
+            println!("  {text}");
+        } else {
+            println!(
+                "  {} {} {} {}",
+                prefix.trim().yellow().bold(),
+                url.blue().underline(),
+                mid.trim().yellow(),
+                code.bold().cyan()
+            );
+        }
+        return;
+    }
+    detail(cli, text);
 }
 
 fn say(cli: &Cli, text: &str) {
@@ -6570,8 +7736,8 @@ fn render_row(cells: &[String], widths: &[usize]) -> String {
     line.trim_end().to_string()
 }
 
-fn table(cli: &Cli, headers: &[&str], rows: &[Vec<String>], dimmed: &[bool]) -> String {
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+fn table<S: AsRef<str>>(cli: &Cli, headers: &[S], rows: &[Vec<String>], dimmed: &[bool]) -> String {
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.as_ref().chars().count()).collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if i < widths.len() {
@@ -6579,7 +7745,7 @@ fn table(cli: &Cli, headers: &[&str], rows: &[Vec<String>], dimmed: &[bool]) -> 
             }
         }
     }
-    let head: Vec<String> = headers.iter().map(|h| h.to_string()).collect();
+    let head: Vec<String> = headers.iter().map(|h| h.as_ref().to_string()).collect();
     let mut out = String::new();
     out.push_str(&render_row(&head, &widths));
     out.push('\n');
@@ -6605,8 +7771,8 @@ fn table(cli: &Cli, headers: &[&str], rows: &[Vec<String>], dimmed: &[bool]) -> 
 #[cfg(test)]
 mod order_tests {
     use super::{
-        order_specs, parse_position, set_positions, looks_like_position, sort_by_stack_order,
-        RpPosition,
+        RpPosition, looks_like_position, order_specs, parse_position, set_positions,
+        sort_by_stack_order,
     };
     use crate::manifest::RpNamed;
     use std::collections::BTreeMap;
@@ -6641,10 +7807,7 @@ mod order_tests {
             &scope,
             Some(RpPosition::At(3)),
         );
-        assert_eq!(
-            positions.get("1.21.10+fabric"),
-            Some(&RpPosition::At(3))
-        );
+        assert_eq!(positions.get("1.21.10+fabric"), Some(&RpPosition::At(3)));
         assert_eq!(positions.get("1.21.9+fabric"), Some(&RpPosition::At(3)));
         assert_eq!(positions.len(), 2);
         assert!(position.is_none(), "the plain one stays untouched");
@@ -6720,7 +7883,10 @@ mod order_tests {
             "icons".to_string(),
             "2".to_string(),
         ];
-        assert_eq!(order_specs(&spaced, false).unwrap(), order_specs(&joined, false).unwrap());
+        assert_eq!(
+            order_specs(&spaced, false).unwrap(),
+            order_specs(&joined, false).unwrap()
+        );
     }
 
     #[test]
@@ -6742,6 +7908,40 @@ mod order_tests {
         assert!(looks_like_position("1"));
         assert!(looks_like_position("off"));
         assert!(!looks_like_position("Ginkgo Font.zip"));
+    }
+}
+
+#[cfg(test)]
+mod changelog_tests {
+    use super::{render_changelog, split_changelog};
+
+    #[test]
+    fn changelog_blocks_are_newest_first() {
+        let raw = "[[2026-09-29]]\nchangelogtext = \"\"\"\nold\n\"\"\"\n\n";
+        let (preamble, mut blocks) = split_changelog(raw);
+        blocks.push((
+            "2026-11-22".to_string(),
+            "[[2026-11-22]]\nchangelogtext = \"\"\"\nnew\n\"\"\"\n".to_string(),
+        ));
+        blocks.sort_by(|a, b| b.0.cmp(&a.0));
+        let out = render_changelog(&preamble, &blocks);
+        let old = out.find("[[2026-09-29]]").expect("old block");
+        let new = out.find("[[2026-11-22]]").expect("new block");
+        assert!(new < old);
+    }
+
+    #[test]
+    fn newest_entry_wins_for_the_same_date() {
+        let raw = "[[2026-11-22]]\nchangelogtext = \"\"\"\nfirst\n\"\"\"\n";
+        let (preamble, mut blocks) = split_changelog(raw);
+        blocks.push((
+            "2026-11-22".to_string(),
+            "[[2026-11-22]]\nchangelogtext = \"\"\"\nsecond\n\"\"\"\n".to_string(),
+        ));
+        let out = render_changelog(&preamble, &blocks);
+        assert!(
+            out.rfind("second").expect("second entry") > out.rfind("first").expect("first entry")
+        );
     }
 }
 
@@ -6771,7 +7971,10 @@ mod version_conflict_tests {
     #[test]
     fn made_for_the_preceding_patch_still_passes() {
         let listed = vec!["1.21.9".to_string(), "1.21.11".to_string()];
-        assert!(game_mc_ok("1.21.10", &listed), "1.21.x builds work across the line");
+        assert!(
+            game_mc_ok("1.21.10", &listed),
+            "1.21.x builds work across the line"
+        );
     }
 
     #[test]
