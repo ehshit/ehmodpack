@@ -61,7 +61,7 @@
     "macOSNote": "MacOS is NOT signed, if MacOS doesn't let you open, allow it from System Settings --> Privacy & Security, or if this still not opening whitelist it from the quaratine on the terminal with:",
     "macOSQuarantineArm": "`xattr -dr com.apple.quarantine ehmodpack-macos-aarch64` (Apple Sillicon),",
     "macOSQuarantineIntel": "`xattr -dr com.apple.quarantine ehmodpack-macos-x86_64` (Apple Intel)",
-    "packageDescription": "{system} package, generated from each new release."
+    "packageDescription": "{system} package."
   },
   "privacyPage": {
     "title": "Privacy Policy",
