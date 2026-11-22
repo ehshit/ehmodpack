@@ -7,6 +7,7 @@ name: Crowdin Upload
     paths:
       - crowdin.yml
       - locales/en-US/cli.ftl
+      - website/src/locales/en-US/ui.json
   workflow_dispatch:
 
 permissions:
